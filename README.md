@@ -1,61 +1,53 @@
 # NingLingo
 
-A personal language-learning workspace for Japanese (`ja`), Spanish (`es`), and Modern Greek (`el`). This stage runs entirely locally with a mock personal identity and replaceable development repositories. English is the interface and explanation language.
+A private language-learning workspace for Japanese (`ja`), Spanish (`es`), and Modern Greek (`el`), with English UI and explanations. Next.js App Router, TypeScript, Tailwind, Supabase Cloud, and server-side DeepL.
 
-## Run locally
+## Run
 
-Use Node.js 22.12 or newer (22.13+ recommended for the current lint dependency tree) and npm.
+Use Node.js 22.12+ and npm. Install pinned dependencies with `npm ci`, configure the existing names from `.env.example` in ignored `.env.local`, then run `npm run dev`. Open http://localhost:3000. Production repositories and email/password authentication are the default.
 
-```sh
-npm ci
-npm run dev
-```
+The cloud database must first receive the ordered migrations. `npm run db:check` validates migration files; `npm run db:migrate` applies them with a Supabase Management API token. The supplied project secret is a Data API credential and cannot execute DDL. No Docker or local Supabase is required. See [database documentation](database/README.md).
 
-Open **http://localhost:3000**. The root opens `/ja`; use the sidebar or mobile language selector to switch languages. No `.env` file or service credentials are needed. Dependencies are pinned and `package-lock.json` is included for a later Git commit. No Git repository or remote has been configured.
+Create the personal account with `node scripts/provision-account.mjs` in an interactive terminal after migrations. Its password input is hidden. Public signup must be disabled in Supabase Auth settings. There is no signup UI, social login, or automatic email invitation.
 
-The first visit seeds 42 words, three short readings, complete alphabets, and one draft grammar lesson per language. Seed words are due today so the review flow can be exercised immediately. New words start at the 1-day stage and are due tomorrow. Existing data is retained in this browser profile and origin; a different browser/device/origin has separate data.
+To use the preserved local/mock workspace, explicitly set `NINGLINGO_REPOSITORY_MODE=local` for your development process. This mode is disabled on Vercel. Development browser data remains separate from cloud accounts and is never silently uploaded. The existing browser tests explicitly select this mode.
 
-## Validate
+## Learning flows
+
+Vocabulary supports lists, CRUD, search/categories, selection/export, accepted answers, ruby/kana, explicit pronunciation, multiple translated examples, and all six related-word relation types. UTF-8 CSV preview preserves the original seven columns and reports valid, duplicate, and invalid rows. Confirmed cloud imports run in one database transaction.
+
+All four quizzes freeze selected words, answers, type, configuration, random seed, and scheduler version. The existing retry engine runs on the authenticated server. Atomic optimistic commits save every answer, retries, history, and once-per-word SRS settlement; conflicts return the latest session. Review stages remain 1/3/7/14/30/60/120 days in the profile timezone (default America/Tijuana).
+
+Reading supports paste/TXT, statuses, body versions, positional manual annotations, vocabulary links, and arbitrary selections. Lookup remains annotation ? personal vocabulary ? sentence-specific cache ? DeepL. Only selected text and bounded sentence context are sent. Actual usage/allowance and machine source are displayed; failures retain manual input. No dictionary readings or inflections are inferred from machine translation.
+
+Alphabet contains the three complete static datasets. Grammar has a versioned production pipeline with 100 Japanese, 80 Spanish, and 60 Modern Greek draft candidates (720 examples, 1,200 exercises), pinned references, and honest review metadata. Production reads only human-reviewed published lessons. See [content provenance and review workflow](docs/GRAMMAR_CONTENT.md).
+
+## Verify
 
 ```sh
 npm run lint
 npm run typecheck
 npm test
-npm run build
-npm start
-```
-
-Browser acceptance tests:
-
-```sh
 npm run test:e2e
+npm run grammar:validate
+npm run build
+npm run security:bundle
+npm run test:cloud
 ```
 
-The Playwright configuration uses installed Microsoft Edge (`channel: msedge`). It starts a local server when needed. On a machine without Edge, install Edge or change the project to an installed Playwright browser. Browser tests use isolated profiles and never touch your normal browser’s learning data.
-
-## Local learning flow
-
-1. Open Vocabulary. Add/edit words, create lists, maintain explicit additional Typing answers, or import a UTF-8 CSV. Preview separates valid, duplicate, and invalid rows before confirmation. Export shown or selected words.
-2. Select words and use **Quiz selected**, or open Quiz and choose words/type. The setup shows the eligible count and retry interval. Hints/audio do not affect scoring. Answers save immediately; **Save & exit** preserves the remaining question and retry schedule. Resume from Quiz or Dashboard. Completing/ending settles each tested word once.
-3. Open Reading, choose a seed passage or paste/upload TXT. Hover, focus, click, or select text. Unknown text uses an explicitly labeled mock placeholder; enter a manual English meaning, optional reading, and Vocabulary link. Add it to Vocabulary if useful. Body edits create versions and require confirmation to clear positional annotations.
-4. Explore Alphabet, then complete the five exercises in a sample Grammar lesson. Four correct answers marks the lesson complete. All samples remain unreviewed development drafts.
-5. Dashboard and Progress reflect first attempts, review stages, weak words, completed lessons, and activity. Settings changes your display name and IANA learning timezone.
+Unit/repository tests include embedded PostgreSQL executing the checked-in migrations with Supabase identity stubs, ownership isolation, transactional imports, CAS/idempotency, SRS, and draft isolation. Embedded tests do not imply Cloud migrations were applied. Existing E2E tests plus Vocabulary extension tests use installed Microsoft Edge, isolated profiles, and local repositories. `test:cloud` creates two temporary confirmed accounts, tests live cookie authentication and cloud ownership, then removes its accounts even on failure. It reports missing cloud migrations as a failure rather than claiming integration passed.
 
 ## Architecture
 
-- `src/domain/`: shared models and pure CSV, quiz/scheduler, SRS, dates, Reading lookup, Grammar scoring, and statistics.
-- `src/repositories/contracts.ts`: persistence and identity interfaces.
-- `src/repositories/local.ts`: the local composition, ownership checks, atomic imports, optimistic session versions, idempotent answers, and review settlement.
-- `src/repositories/storage.ts`: the sole browser-storage boundary, plus a memory adapter for tests. Web Locks serialize cross-tab writes where supported. Storage notifications refresh repository-backed UI. Failed/blocked storage reports memory-only mode.
-- `src/services/`: global SpeechSynthesis controller and development TranslationProvider.
-- `src/components/`: repository-driven UI; components do not access storage.
-- `src/data/`: local vocabulary, Alphabet, and clearly labeled draft Grammar samples.
-- `src/app/[language]/`: shared Dashboard, Vocabulary, Quiz, Reading, Grammar, Alphabet, Progress, and Settings routes. Grammar details live at `/[language]/grammar/[id]`.
+- `src/domain/`: shared models, CSV, deterministic quiz/retry engine, SRS, timezone dates, lookup priority, grammar scoring, statistics.
+- `src/repositories/contracts.ts`: replaceable persistence and identity contracts.
+- `src/repositories/http.ts`: browser facade and refresh/subscription boundary.
+- `src/repositories/supabase.ts`: authenticated server repositories, RPC transactions, version conflicts, cloud mapping.
+- `src/lib/supabase/`: separate browser/server clients; privileged client is server-only.
+- `src/proxy.ts`: Next.js 16 cookie refresh and protected navigation; operations independently verify users.
+- `src/services/`: validated API operations, server translation provider, shared audio controller.
+- `src/repositories/local.ts` and `storage.ts`: preserved mock/test implementation with isolated browser storage.
+- `database/migrations/`: ordered schema, RLS, functions, constraints and indexes.
+- `content/grammar/` and `scripts/grammar-*.mjs`: pinned sources, authored candidates, generation, QA and atomic import.
 
-See [the archived v1 product specification](docs/SPECIFICATION_V1.md) and [the integration handoff](docs/INTEGRATION_HANDOFF.md).
-
-## Stage boundary
-
-The local mock profile is not authentication. Cloud sync, email/password login, real DeepL results/quota checks, and the 240 reviewed production lessons remain for the connected-data stage. Pronunciation depends on voices installed on the device. The UI reports missing voices and retains all other learning controls.
-
-No Supabase connection/schema execution, GitHub configuration/push, real DeepL request, or Vercel deployment is part of this stage. Future environment variable names are documented in `.env.example`; leave them unset until integration is explicitly configured.
+See [the unchanged product specification](docs/SPECIFICATION_V1.md), [the approved production/Vocabulary extension](docs/PRODUCTION_SCOPE.md), and [the verified completion report and external blockers](docs/INTEGRATION_HANDOFF.md). Credentials and `.env.local` must never be committed.

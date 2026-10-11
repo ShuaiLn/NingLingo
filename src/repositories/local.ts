@@ -4,6 +4,7 @@ import { BrowserStorageAdapter, LOCAL_STORAGE_KEY, LocalStore, type LocalDatabas
 import { createDevelopmentSeed } from "./seed";
 import { grammarSeeds } from "@/data/grammar";
 import { vocabularyDuplicateKey } from "@/domain/csv";
+import { normalizeVocabularyDetails, vocabularyExamples } from "@/domain/vocabulary";
 import { createQuizSession, answerQuiz } from "@/domain/quiz";
 import { captureDueReview, initialWordProgress, settleQuizReview } from "@/domain/review";
 import { learningDate } from "@/domain/dates";
@@ -34,7 +35,7 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
     const timestamp = now();
     const existing = id ? owned(data.entries.find(item => item.id === id), data) : undefined;
     if (existing && existing.language !== input.language) throw new Error("An entry cannot change language.");
-    const entry: VocabularyEntry = { ...structuredClone(input), word: input.word.trim(), translation: input.translation.trim(), reading: input.reading.trim(), id: id ?? crypto.randomUUID(), userId: data.profile.id, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp, acceptedAnswers: input.acceptedAnswers.filter(answer => answer.text.trim()).map(answer => ({ id: answer.id || crypto.randomUUID(), text: answer.text.trim() })) };
+    const entry: VocabularyEntry = { ...structuredClone(input), ...normalizeVocabularyDetails(input), word: input.word.trim(), translation: input.translation.trim(), reading: input.reading.trim(), id: id ?? crypto.randomUUID(), userId: data.profile.id, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp, acceptedAnswers: input.acceptedAnswers.filter(answer => answer.text.trim()).map(answer => ({ id: answer.id || crypto.randomUUID(), text: answer.text.trim() })) };
     if (data.entries.some(item => item.userId === data.profile.id && item.id !== entry.id && item.language === entry.language && vocabularyDuplicateKey(item) === vocabularyDuplicateKey(entry))) throw new Error("An identical word, reading, and translation already exists.");
     return entry;
   };
@@ -49,7 +50,7 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
       createList: (language, name) => store.transaction(data => { if (!name.trim()) throw new Error("Give your list a name."); const list = { id: crypto.randomUUID(), userId: data.profile.id, language, name: name.trim(), createdAt: now() }; data.lists.push(list); return list; }),
       renameList: (id, name) => store.transaction(data => { const list = owned(data.lists.find(item => item.id === id), data); if (!name.trim()) throw new Error("Give your list a name."); list.name = name.trim(); return list; }),
       deleteList: id => store.transaction(data => { owned(data.lists.find(item => item.id === id), data); const ids = personal(data.entries, data).filter(entry => entry.listId === id).map(entry => entry.id); data.lists = data.lists.filter(list => list.id !== id || list.userId !== data.profile.id); data.entries = data.entries.filter(entry => entry.listId !== id || entry.userId !== data.profile.id); data.wordProgress = data.wordProgress.filter(word => word.userId !== data.profile.id || !ids.includes(word.wordId)); }),
-      getEntries: async language => { const data = store.snapshot(); return personal(data.entries, data).filter(entry => entry.language === language); },
+      getEntries: async language => { const data = store.snapshot(); return personal(data.entries, data).filter(entry => entry.language === language).map(entry => ({ ...entry, examples: vocabularyExamples(entry), relatedWords: entry.relatedWords ?? [] })); },
       saveEntry: (input, id) => store.transaction(data => { const entry = prepareEntry(input, data, id); const index = data.entries.findIndex(item => item.id === entry.id); if (index >= 0) data.entries[index] = entry; else { data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); } return entry; }),
       deleteEntries: ids => store.transaction(data => { ids.forEach(id => owned(data.entries.find(entry => entry.id === id), data)); data.entries = data.entries.filter(entry => entry.userId !== data.profile.id || !ids.includes(entry.id)); data.wordProgress = data.wordProgress.filter(progress => progress.userId !== data.profile.id || !ids.includes(progress.wordId)); }),
       importEntries: inputs => store.transaction(data => { let imported = 0; let duplicates = 0; for (const input of inputs) { if (personal(data.entries, data).some(entry => entry.language === input.language && vocabularyDuplicateKey(entry) === vocabularyDuplicateKey(input))) { duplicates++; continue; } const entry = prepareEntry(input, data); data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); imported++; } return { imported, duplicates }; }),

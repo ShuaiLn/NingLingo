@@ -3,7 +3,11 @@ export type ISODate = string;
 export interface UserProfile { id: string; email: string; displayName: string; timezone: string; createdAt: string }
 export interface VocabularyList { id: string; userId: string; language: LanguageCode; name: string; createdAt: string }
 export interface AcceptedAnswer { id: string; text: string }
-export interface VocabularyEntry { id: string; userId: string; language: LanguageCode; listId: string; word: string; reading: string; translation: string; type: string; category: string; example: string; notes: string; acceptedAnswers: AcceptedAnswer[]; createdAt: string; updatedAt: string }
+export interface VocabularyExample { id: string; text: string; reading: string; translation: string }
+export const RELATION_TYPES = ["derived", "compound", "synonym", "antonym", "word_form", "related"] as const;
+export type RelationType = typeof RELATION_TYPES[number];
+export interface RelatedWord { id: string; word: string; reading: string; translation: string; relationType: RelationType }
+export interface VocabularyEntry { id: string; userId: string; language: LanguageCode; listId: string; word: string; reading: string; translation: string; type: string; category: string; example: string; examples?: VocabularyExample[]; relatedWords?: RelatedWord[]; notes: string; acceptedAnswers: AcceptedAnswer[]; createdAt: string; updatedAt: string }
 export type VocabularyInput = Omit<VocabularyEntry, "id" | "userId" | "createdAt" | "updatedAt">;
 export const REVIEW_DAYS = [1, 3, 7, 14, 30, 60, 120] as const;
 export type ReviewStage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -21,6 +25,7 @@ export interface TranslationCacheEntry { id: string; userId: string; language: L
 export type LookupSource = "annotation" | "vocabulary" | "cache" | "mock" | "deepl";
 export interface LookupResult { text: string; translation: string; reading: string; source: LookupSource; vocabularyEntryId: string | null }
 export interface LookupRequest { readingId: string; bodyVersion: number; start: number; end: number }
+export interface TranslationUsage { used: number; limit: number; available: boolean }
 export interface TranslationProvider { translate(input: { userId: string; language: LanguageCode; text: string; context: string }): Promise<{ translation: string; source: "mock" | "deepl" }>; usage(): Promise<{ used: number; limit: number; available: boolean }> }
 export interface GrammarSource { title: string; url: string; version: string; license: string; attribution: string }
 export interface GrammarExample { id: string; text: string; reading?: string; translation: string }

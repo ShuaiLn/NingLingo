@@ -1,0 +1,3 @@
+# Content manifests and migration history hash exact bytes on every platform.
+content/grammar/** text eol=lf
+database/migrations/** text eol=lf

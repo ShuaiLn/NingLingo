@@ -1,13 +1,15 @@
 "use client";
 import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import type { AppRepositories } from "@/repositories/contracts";
-import { createLocalRepositories } from "@/repositories/local";
+import { createHttpRepositories } from "@/repositories/http";
+import { useRouter } from "next/navigation";
 import type { ActivityRecord, GrammarPoint, GrammarProgress, LanguageCode, QuizSession, Reading, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
 const RepositoryContext = createContext<AppRepositories | null>(null);
 let browserRepositories: AppRepositories | null = null;
-export function AppProvider({ children }: { children: React.ReactNode }) {
+export function AppProvider({ children, local = false }: { children: React.ReactNode; local?: boolean }) {
+  const router = useRouter();
   const [repos, setRepos] = useState<AppRepositories | null>(null);
-  useEffect(() => { let active = true; Promise.resolve().then(() => { browserRepositories ??= createLocalRepositories(); if (active) setRepos(browserRepositories); }); return () => { active = false; }; }, []);
+  useEffect(() => { let active = true; Promise.resolve().then(async () => { browserRepositories ??= local ? (await import("@/repositories/local")).createLocalRepositories() : createHttpRepositories(() => router.replace("/login?error=expired")); if (active) setRepos(browserRepositories); }); return () => { active = false; }; }, [local, router]);
   if (!repos) return <div className="initial-loader" role="status"><span className="brand-mark">n</span><p>Opening your learning space…</p></div>;
   return <RepositoryContext.Provider value={repos}>{children}</RepositoryContext.Provider>;
 }

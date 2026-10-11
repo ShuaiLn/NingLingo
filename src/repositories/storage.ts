@@ -1,4 +1,5 @@
 import type { ActivityRecord, GrammarProgress, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import { RELATION_TYPES } from "@/domain/models";
 
 export interface LocalDatabase {
   schemaVersion: 1;
@@ -29,7 +30,9 @@ function question(row: Record<string, unknown>): boolean {
   return strings(row, ["id", "wordId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && nullableString(row.correctChoiceId) && stringArray(row.acceptedAnswers) && rows(row.choices, choice => strings(choice, ["id", "text", "audioText"]));
 }
 function vocabulary(row: Record<string, unknown>): boolean {
-  return ownedLanguage(row) && strings(row, ["id", "listId", "word", "reading", "translation", "type", "category", "example", "notes", "createdAt", "updatedAt"]) && rows(row.acceptedAnswers, answer => strings(answer, ["id", "text"]));
+  return ownedLanguage(row) && strings(row, ["id", "listId", "word", "reading", "translation", "type", "category", "example", "notes", "createdAt", "updatedAt"]) && rows(row.acceptedAnswers, answer => strings(answer, ["id", "text"]))
+    && (row.examples === undefined || rows(row.examples, example => strings(example, ["id", "text", "reading", "translation"])))
+    && (row.relatedWords === undefined || rows(row.relatedWords, related => strings(related, ["id", "word", "reading", "translation"]) && oneOf(related.relationType, RELATION_TYPES)));
 }
 function session(row: Record<string, unknown>): boolean {
   const configuration = object(row.configuration);

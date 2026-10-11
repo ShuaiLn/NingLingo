@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": 1,
+  "status": "draft",
+  "humanReview": "pending",
+  "sources": {
+    "openjlpt": {
+      "commit": "0d1d3410bec90bd4098a7c72de820543cb4f707c",
+      "files": [
+        "n5.json",
+        "n4.json"
+      ],
+      "selected": {
+        "N5": 81,
+        "N4": 19
+      },
+      "n4Ids": [
+        "ageru-kureru-morau",
+        "te-ageru",
+        "te-kureru",
+        "te-morau",
+        "te-iku",
+        "te-kuru",
+        "te-shimau-chau",
+        "te-oku",
+        "te-miru",
+        "te-aru",
+        "toki",
+        "aida-aida-ni",
+        "sou-da-appearance",
+        "sou-da-hearsay",
+        "sugiru",
+        "kata",
+        "tsumori",
+        "koto-ga-dekiru",
+        "hou-ga-ii"
+      ]
+    },
+    "wikibooks": [
+      {
+        "title": "Wikibooks Spanish: Contents and linked grammar reference",
+        "url": "https://en.wikibooks.org/w/index.php?title=Spanish/Contents&oldid=4487563",
+        "version": "Wikibooks revision 4487563 (2025-04-21)",
+        "license": "CC-BY-SA-4.0 (reference source)",
+        "attribution": "Wikibooks Spanish contributors; topic/syllabus reference. NingLingo explanations, examples, and exercises are original AI drafts, not copied Wikibooks passages."
+      },
+      {
+        "title": "Wikibooks Spanish: Tenses",
+        "url": "https://en.wikibooks.org/w/index.php?title=Spanish/Tenses&oldid=4343296",
+        "version": "Wikibooks revision 4343296 (2023-11-23)",
+        "license": "CC-BY-SA-4.0 (reference source)",
+        "attribution": "Wikibooks Spanish contributors. Conjugation reference only; NingLingo pedagogical text and exercises are original AI drafts."
+      },
+      {
+        "title": "Wikibooks Spanish: Pronouns",
+        "url": "https://en.wikibooks.org/w/index.php?title=Spanish/Pronouns&oldid=3979135",
+        "version": "Wikibooks revision 3979135 (2021-09-01)",
+        "license": "CC-BY-SA-4.0 (reference source)",
+        "attribution": "Wikibooks Spanish contributors. Pronoun reference only; no learner-facing paragraphs copied."
+      },
+      {
+        "title": "Wikibooks Spanish: El tiempo pasado",
+        "url": "https://en.wikibooks.org/w/index.php?title=Spanish/Lessons/El_tiempo_pasado&oldid=4661004",
+        "version": "Wikibooks revision 4661004 (2026-08-18)",
+        "license": "CC-BY-SA-4.0 (reference source)",
+        "attribution": "Wikibooks Spanish contributors. Past-tense reference only; NingLingo examples and exercises are original AI drafts."
+      }
+    ],
+    "kallipos": {
+      "title": "Modern Greek: Grammar Notes for Absolute Beginners (A1–A2)",
+      "url": "https://repository-web.kallipos.gr/handle/11419/4393",
+      "version": "Poulopoulou 2015; ISBN 978-960-603-129-8; DOI 10.57713/kallipos-583",
+      "license": "CC-BY-NC-SA-3.0-GR (reference source only)",
+      "attribution": "Maria Poulopoulou, Kallipos Open Academic Editions (2015). Topic reference only: no textbook prose, examples, exercises, audio, or illustrations are redistributed. The textbook’s reviewer is not a reviewer of NingLingo content."
+    }
+  },
+  "datasets": [
+    {
+      "language": "ja",
+      "lessons": 100,
+      "examples": 300,
+      "exercises": 500,
+      "sha256": "d22d6433e8123d2a8faaff8594d222b57923d850084906ee41b7814556e19c83"
+    },
+    {
+      "language": "es",
+      "lessons": 80,
+      "examples": 240,
+      "exercises": 400,
+      "sha256": "168b22afec69bb7f962b8e800b7715debcce56eadf30bed5a5417d31f8cebb6f"
+    },
+    {
+      "language": "el",
+      "lessons": 60,
+      "examples": 180,
+      "exercises": 300,
+      "sha256": "422efa064cb8aae5ed36585791705d8472a55f937a07d9cb71308226726950d6"
+    }
+  ]
+}

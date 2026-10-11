@@ -21,6 +21,7 @@ export interface QuizRepository {
   end(id: string, version: number): Promise<QuizSession>;
 }
 export interface ReadingRepository {
+  getTranslationUsage?(): Promise<import("@/domain/models").TranslationUsage>;
   getReadings(language: LanguageCode): Promise<Reading[]>;
   save(input: { language: LanguageCode; title: string; body: string; status: Reading["status"] }, id?: string, clearAnnotations?: boolean, expectedBodyVersion?: number): Promise<Reading>;
   delete(id: string): Promise<void>;

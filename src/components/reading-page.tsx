@@ -28,6 +28,7 @@ function ReadingWorkspace({ language }: { language: LanguageCode }) {
   const [clearAnnotations, setClearAnnotations] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [lookup, setLookup] = useState<LookupResult | null>(null);
+  const [allowance, setAllowance] = useState("");
   const [translation, setTranslation] = useState("");
   const [readingText, setReadingText] = useState("");
   const [linkedId, setLinkedId] = useState("");
@@ -43,6 +44,12 @@ function ReadingWorkspace({ language }: { language: LanguageCode }) {
   const selected = readings.find(item => item.id === selectedId) ?? null;
   useAudioStopOnChange(`${selectedId}:${selection?.start}:${selection?.end}`);
   const tokens = useMemo(() => selected ? tokenizeReading(selected.body, language, entries) : [], [selected, language, entries]);
+  useEffect(() => {
+    if (!repos.reading.getTranslationUsage) return;
+    let active = true;
+    repos.reading.getTranslationUsage().then(usage => { if (active) setAllowance(usage.limit > 0 ? `DeepL: ${usage.used.toLocaleString()} / ${usage.limit.toLocaleString()} characters used.${usage.available ? "" : " Allowance exhausted; manual translation is available."}` : "DeepL is unavailable. Manual translation is available."); }).catch(() => { if (active) setAllowance("DeepL allowance is unavailable. Manual translation is available."); });
+    return () => { active = false; };
+  }, [repos, lookup]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -170,6 +177,7 @@ function ReadingWorkspace({ language }: { language: LanguageCode }) {
 
   return <div>
     <div className="page-heading"><div><p className="eyebrow">Read in context</p><h1>Reading</h1><p className="muted">Keep useful words close to the stories you find them in.</p></div><button className="button" onClick={createReading}>New reading</button></div>
+    {allowance && <p className="mini-note">{allowance}</p>}
     {error && <p className="notice" role="alert">{error}</p>}
     {message && <p className="notice" role="status">{message}</p>}
     <div className="reading-layout">
