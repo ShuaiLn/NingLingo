@@ -1,120 +1,97 @@
-# NingLingo integration handoff
+# NingLingo production implementation report
 
-This handoff describes the local development stage. The original v1 specification remains the product source of truth. Supabase, GitHub, DeepL, and Vercel have not been connected or configured.
+Verified October 11, 2026. The production implementation is committed and pushed to `main`. **The cloud release is blocked by administrative platform access and genuine human content review.** No cloud database migration, public-signup configuration change, permanent personal account, or Vercel deployment is claimed as completed.
 
-## Completed locally
+The original [SPECIFICATION_V1.md](SPECIFICATION_V1.md) is unchanged. [PRODUCTION_SCOPE.md](PRODUCTION_SCOPE.md) records the subsequently authorized integration and Vocabulary additions. The prior stable local checkpoint remains in Git history (`0d5a027`, merged on `main` at `dde5e8f`).
 
-- Next.js App Router, TypeScript, Tailwind, pinned dependencies, and `package-lock.json`; shared `ja`, `es`, and `el` routes; English interface; responsive sidebar/mobile navigation and language themes.
-- Replaceable mock personal session, repository contracts, browser persistence behind one adapter, and an in-memory adapter for tests. No component accesses browser storage directly.
-- Vocabulary lists/CRUD/search/filter/selection, accepted answers, Japanese ruby/kana display, CSV preview/validation/import/export, and transactional local import.
-- Shared browser speech synthesis, runtime voice discovery, locale fallback, global playback control, and answer-safe audio interactions.
-- Four quiz types, frozen vocabulary/answers/question templates, deterministic seeded retry scheduling, persisted answers, optimistic versions, idempotent submissions, and save/resume/end.
-- Review stages of 1/3/7/14/30/60/120 days, per-account civil dates, once-per-session settlement, once-per-day advancement, due-review error resets, and unchanged due dates for early practice.
-- Reading library, UTF-8 TXT/pasted text, body versions/status, positional manual annotations, keyboard/click/350ms hover lookup, personal vocabulary matching, contextual cache, request deduplication, and manual addition/linking to Vocabulary.
-- Complete Alphabet structures and local seed content; Grammar list/detail/exercises/80% completion/content metadata with representative development lessons; Dashboard/Progress/Settings calculated from repositories.
-- Pure business logic and repository integration tests. Run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` before accepting a connected-data change.
+## Production architecture
 
-## Local acceptance results
+Next.js 16.4 App Router uses `@supabase/ssr` cookie sessions, separate browser/server clients, and the current `src/proxy.ts` convention for refresh/protected navigation. Every API operation independently verifies the cookie user with `auth.getUser()`. Login is email/password only; logout, persistence, expired-session handling, and protected pages/APIs are implemented. There is no signup or OAuth UI.
 
-Verified on October 11, 2026: lint and TypeScript checks pass; **113 unit/repository tests** pass; the **production build** passes; **17 Playwright browser tests** pass against the local production server. Browser coverage includes all eight pages in all three languages, mobile navigation, CSV import/export, all four quizzes, retries/save/resume, cross-tab conflicts, frozen choices, answer-safe hints/audio, Reading selection/version/manual annotation/Vocabulary flows, 80% Grammar completion, Dashboard updates, and timezone validation/persistence.
+React calls the existing repository contracts through `src/repositories/http.ts`. Authenticated server implementations in `src/repositories/supabase.ts` replace Vocabulary, Quiz, Reading, Grammar, Progress, Settings, and session persistence. No production fallback seeds mock data. The explicit local development/test mode remains available and cannot activate on Vercel. Cross-device refresh uses focus/visibility, polling, optimistic conflicts, and cloud reads; history/activity reads paginate past Supabase's default row limit.
 
-Quiz activity is recorded on each committed answer's actual account learning day, including unfinished/saved sessions; idempotent submissions do not add activity twice. SRS continues to settle only at completion or active ending. Device speech availability is detected at runtime; browser interaction tests use controlled voices and do not certify every real device's installed voices.
+CSV parsing/preview stays client-side; confirmed import is one PostgreSQL transaction. Vocabulary now stores multiple translated examples and six explicit relation types in relational child tables while preserving the original seven-column CSV. Supplied Japanese readings render as ruby and share audio; Spanish/Greek pronunciations and forms remain explicit.
 
-## Local-stage limits
+Quiz creation freezes full entries, accepted answers, type/configuration, deterministic seed and scheduler version. The existing tested engine grades/schedules on the server. Service-only atomic CAS functions persist state, relational questions/attempts/reservations, idempotency, activity, and SRS settlement. Snapshot/history immutability, stale versions, same-day advancement, early practice, timezone dates, and once-per-word settlement are preserved.
 
-The mock profile is a development convenience, not authentication. Data belongs to this browser and origin; cross-device cloud sync and email/password login require the next stage. Browser tabs use storage notifications and Web Locks where available. A blocked/full browser store falls back to memory and reports that state.
+Reading uses version-checked edits, UTF-16 positional annotations, vocabulary links, longest Japanese matching, preserved accents, and annotation ? vocabulary ? contextual cache ? DeepL priority. Cache identity includes user/language/text/sentence. Concurrent requests merge within a server instance; database uniqueness merges duplicate cache writes. Alphabet stays static. Grammar grades and versioned progress persist through server/RPC operations; Dashboard/Progress read actual repository data.
 
-The development translation provider returns an explicitly labeled placeholder, with a manual meaning field. It makes no DeepL request and does not fabricate readings, dictionary forms, or parts of speech. Browser/device voices determine pronunciation availability.
+## Database and migration status
 
-Grammar samples remain development drafts. They are not the final 100 Japanese, 80 Spanish, and 60 Modern Greek reviewed lessons. All 240 production lessons still require source/version/license attribution, human review records, three or more valid translated examples, and five or more unambiguous exercises.
+**Cloud: 0 NingLingo migrations applied. Embedded PostgreSQL: all 11 applied and tested.** The supplied project Data API credentials work, but cannot execute DDL. `db:migrate` stopped before SQL execution because an authorized Management API credential was absent. A real grammar import attempt returned `PGRST202` for the missing `nl_import_grammar` function. Live cloud persistence/RLS verification therefore remains blocked; this is not a passing cloud-integration result.
 
-## Replaceable boundaries
-
-`src/repositories/contracts.ts` defines `AuthRepository`, `VocabularyRepository`, `QuizRepository`, `ReadingRepository`, `GrammarRepository`, `ProgressRepository`, and `SettingsRepository`. Replace the implementations in `src/repositories/local.ts` through the application provider; retain the UI and pure domain functions.
-
-Replace `MockTranslationProvider` in `src/services/translation.ts` with a **server-only** DeepL provider implementing `TranslationProvider`. `ReadingLookupService` must retain manual annotation → personal vocabulary → contextual cache → provider order. Alphabet can remain static; replace development Grammar seeds with versioned, reviewed content.
-
-## Proposed database schema
-
-This is a design draft, not executable SQL or an applied migration. Use UUIDs for connected records and map the mock user/record IDs explicitly if importing local data.
-
-| Table | Main fields and constraints |
+| Migration | Responsibility |
 | --- | --- |
-| `profiles` | `user_id` → `auth.users`, display name, IANA timezone default `America/Tijuana`, timestamps. |
-| `vocabulary_lists` | ID, owner, language constrained to `ja/es/el`, name, timestamps. |
-| `vocabulary_entries` | ID, owner, language, owned list, word/reading/English translation/type/category/example/notes, timestamps; required nonblank word/translation; unique owner + language + canonically normalized word/reading/translation. Same spelling with different meaning remains valid. |
-| `accepted_answers` | ID, owned entry, explicit English answer; unique entry + normalized answer. Primary translation also remains an accepted Typing answer. |
-| `word_progress` | Owner/entry unique pair, stage `0..6`, due civil date, last-advanced/studied dates, first-attempt/correct/error counters. |
-| `quiz_sessions` | Owner, language/type/status, immutable entry/answer/question configuration snapshots, random seed/state, scheduler version, optimistic version, creation/answer timestamps, due-word snapshot, start learning date, settled marker. |
-| `quiz_questions` | Session, stable question ID, ordinal, entry snapshot ID, initial/retry/filler kind, frozen prompt/choices/answers; unique session + ordinal. |
-| `quiz_attempts` | Session/question/word snapshot IDs, submission ID, ordinal/kind, submitted answer, correctness, answered timestamp; unique session + submission ID and one committed answer per question. |
-| `retry_reservations` | Session, word snapshot ID, future ordinal, interval; unique session + future ordinal and session + word. |
-| `review_settlements` | Owner/session/entry unique tuple, settlement learning date and result. Guarantees once-per-word/session SRS updates independently of request retries. |
-| `readings` | Owner, language, title, current body/version, status, timestamps. |
-| `reading_versions` | Reading/version unique pair, immutable body and creation timestamp. |
-| `reading_annotations` | Owner, reading/body version, start/end offsets, selected text, manual translation/reading, optional owned vocabulary link. Positions use the UI's UTF-16 offsets; server validation must use that same convention. |
-| `translation_cache` | Owner, language, selected text, sentence context, translation/source, timestamp; unique owner + language + normalized text + context (a digest may index large contexts, with full-key equality validation). |
-| `grammar_points` / `grammar_versions` | Stable lesson ID/language/level/category and immutable content version, explanation/formation, draft/reviewed/published status, modification notes. |
-| `grammar_examples` / `grammar_exercises` | Lesson version, ordered translated examples/readings and ordered exercise choices/correct answer/explanation. Validate minimum counts and unique correct answers before publication. |
-| `grammar_sources` / `grammar_reviews` | Lesson version, pinned source URL/version/license/attribution, author details for reused sentence/translation pairs, human reviewer/date/modification record. |
-| `grammar_progress` | Owner/lesson version, latest correct/total result, completion at `>=80%`, attempt timestamp. Once achieved, completion remains true for that content version even after a lower practice score; a new content version must be completed separately. |
-| `learning_activity` | Owner/language/civil learning date/kind/count and idempotent originating event ID for streak and history calculations. |
+| 001 | Profiles, timezone/language settings, account bootstrap |
+| 002 | Lists, entries, accepted answers, word progress |
+| 003 | Immutable quiz snapshots, questions, attempts, retries, settlements, activity |
+| 004 | Readings, body versions, annotations, contextual cache, Unicode ranges |
+| 005 | Normalized grammar versions/examples/exercises/sources/reviews/progress |
+| 006 | Vocabulary examples and related/derived words |
+| 007 | Ownership RLS and published-content isolation |
+| 008 | Validated repository read/mutation functions and atomic CSV import |
+| 009 | Service-only quiz CAS/idempotency and transactional SRS |
+| 010 | Atomic immutable grammar import and publication validation |
+| 011 | Ownership/query indexes and explicit execution grants |
 
-Foreign keys must enforce language and ownership consistency as well as existence. Deleting a live vocabulary word must not destroy a frozen quiz snapshot. Use a nullable live-word link for old annotations or a deliberate unlink operation. Keep indexes on owner + language, due dates, session owner/status, and reading/version/range.
+[database/migrations](../database/migrations) and [database/README.md](../database/README.md) contain the reproducible schema and RPC contracts. `npm run db:migrate` uses the Cloud Management API, transactionally records SHA-256 migration history, and rejects rewritten/out-of-order history. `.gitattributes` fixes content/migration line endings for portable hashes. No Docker/local Supabase stack is required.
 
-## Required RLS and authorization
+All 24 domain tables enable RLS. Personal SELECT/allowed writes use `auth.uid()`; composite foreign keys preserve ownership/language consistency. Anonymous access is revoked. Users cannot directly forge quiz grades, SRS stages, machine cache, grammar publication/review, or exercise completion. Published grammar requires a human review record; drafts and their child content are hidden. Privileged quiz/cache/content operations run only on the authenticated server or explicit administrative CLI. Pinned function search paths and execution grants are included.
 
-- Enable RLS on every personal or exposed table. Grant personal reads/inserts/updates/deletes only to authenticated users whose ID equals the row owner. Update policies need both `USING` and `WITH CHECK`; insert policies need `WITH CHECK`. No anonymous personal-data access.
-- Child tables must verify the owned parent and matching ownership/language. Apply this to accepted answers, versions, annotations, quiz questions/attempts/reservations, and settlements; an arbitrary foreign ID is never sufficient authorization.
-- Published Grammar content can be read by the signed-in personal account. Content editing/publishing and human review metadata require a separately authorized administrative process. User progress remains owner-only.
-- Prefer invoker-rights RPCs. Any unavoidable privileged function needs explicit ownership checks, restricted execution grants, and a safe search path. Read-only views must preserve underlying RLS.
-- Validate the authenticated session and record ownership on every server mutation. Do not trust a client-supplied user ID, correct answer, grade, review stage, provider source, or publication status.
+## Authentication and DeepL verification
 
-## Required Auth setup
+Live email/password and browser cookie authentication passed **7 assertions**, including login, reload persistence, protected navigation, logout, and unauthenticated API rejection. Two temporary confirmed verification accounts were removed; the final admin probe found **0 users**. No permanent account was invented because the owner's intended email/private password was not supplied. `node scripts/provision-account.mjs` provides interactive account creation with hidden password input and sends no email.
 
-After the owner connects Supabase, enable email/password sign-in, disable public sign-up, and pre-create the personal account through the approved administrative path. Provide login/logout and password recovery, configure local/production redirect URLs, and use the Next.js SSR cookie integration. Replace `AuthRepository` and the mock profile; protect pages and server handlers with verified session checks.
+The final Auth settings probe still reports `disable_signup=false`. Disable **Allow new users to sign up** in Supabase [Auth general configuration](https://supabase.com/docs/guides/auth/general-configuration) once configuration access is available. Keep email/password enabled; configure Site URL/redirect URLs for the actual deployed domain. No OAuth configuration is needed.
 
-Keep development mocks as an explicit local/test composition. A production-connected build must use real authentication rather than silently allowing the mock account.
+DeepL is implemented server-side and verified live. The configured hostname rejected the supplied key; only `DEEPL_API_BASE_URL` in ignored `.env.local` was corrected to `https://api-free.deepl.com`. Usage returned HTTP 200 with **1 / 1,000,000 characters used** after one selected Japanese character translation also returned HTTP 200. The provider reads actual allowance, sends selected text with bounded sentence context, labels machine output, infers no reading/POS/lemma, and retains manual entry on configuration/network/rate/quota failure. No billing upgrade was attempted. Cloud cache persistence awaits migrations; adapter/SQL behavior is tested locally.
 
-## Future environment variables
+## Grammar content status
 
-No credentials are required for this stage. In the connected stage, document and configure:
+| Language | Prepared | Draft | Human reviewed | Published |
+| --- | ---: | ---: | ---: | ---: |
+| Japanese | 100 (81 N5, 19 foundational N4) | 100 | 0 | 0 |
+| Spanish | 80 | 80 | 0 | 0 |
+| Modern Greek | 60 | 60 | 0 | 0 |
+| Total | 240 | 240 | 0 | 0 |
 
-| Variable | Scope/purpose |
+The dataset has **720 translated examples and 1,200 exercises**, stable IDs, pinned source/license metadata, content versions and modification notes. Structural QA passes every record; it does not certify native-speaker correctness or semantic uniqueness of every distractor. No AI authoring/automated QA is mislabeled as human review. Production UI reads published content only and explains review-pending empty states.
+
+[GRAMMAR_CONTENT.md](GRAMMAR_CONTENT.md) documents OpenJLPT attribution, original Spanish/Greek authoring, pinned Wikibooks/Kallipos references, and review/version rules. `grammar:build`, `grammar:validate`, and `grammar:import` prepare/validate/import the initial drafts atomically. An explicit `--reviewed-file=...` import accepts genuinely approved version-2-or-later records with reviewer/date metadata; initial draft files stay unchanged. All 240 require actual qualified human review before the full v1 content release.
+
+## Final verification results
+
+| Check | Verified result |
 | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Project URL for browser/server clients. |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public client key, protected by RLS; never substitute an administrative secret. |
-| `SUPABASE_SECRET_KEY` | Optional server/admin-only account provisioning or content import; never included in browser bundles. Ordinary user operations should use their authenticated session. |
-| `DEEPL_API_KEY` | Server-only DeepL credential. |
-| `DEEPL_API_BASE_URL` | Server-only endpoint selected from the actual connected plan; configure from current official documentation. |
-| `APP_URL` | Canonical application URL for the final Auth redirect configuration. |
+| ESLint | PASS, zero warnings |
+| TypeScript | PASS |
+| Unit/repository tests | **451 / 451**, 20 files |
+| Included PostgreSQL migration/security tests | **27 / 27**, including all 240 draft imports, ownership A/B, atomic rollback, CAS, SRS and draft isolation |
+| Included production Supabase adapter tests | **27 / 27**, including field mapping, version/idempotency conflicts, lookup/cache and pagination |
+| Included production grammar QA tests | **255 / 255** |
+| Playwright browser tests | **20 / 20**, Microsoft Edge, explicit local repositories; all original 17 retained plus 3 Vocabulary extension flows |
+| Live Supabase Auth | **7 assertions PASS**, 2 temporary accounts cleaned up |
+| Live cloud persistence/RLS | BLOCKED by unapplied schema; `test:cloud` intentionally reports failure after passing Auth |
+| Live DeepL | Usage and selected-text translation HTTP 200 |
+| Grammar CLI / migration file validation | PASS: 240 records / 11 ordered files |
+| Production build | PASS, Next.js webpack production build with protected dynamic routes and Proxy |
+| Secret checks | PASS: configured server credentials absent from client artifacts and staged files; `.env.local` ignored/uncommitted |
 
-Pin any added Supabase packages and update the existing lockfile. Do not commit `.env.local` or secrets.
+Browser checks include four quiz modes, one-word typing/retries, conflicts/resume/frozen snapshots, hint/audio isolation, Reading selection/version/cache architecture, CSV, richer Vocabulary data, grammar 80% completion, Dashboard/settings, all pages/languages, and mobile layout. Local/database tests cover the remaining scheduler boundary counts, collision/repeated/tail retries, SRS/timezone/ownership and structural content cases. These local results do not imply unperformed live database or deployment checks passed.
 
-## Server integration and DeepL steps
+## GitHub, deployment and remaining access
 
-1. Implement transactional Vocabulary import, quiz creation/answer/settlement, and Reading version updates behind the existing contracts. Expose the specified quiz session/answer and Reading lookup server endpoints; enforce owner checks and optimistic session versions. Reading edits must check the submitted expected body version, and annotations must retain the version of their original selection.
-2. Lock a quiz session row while checking submission ID, expected version, grading, scheduling its next question, and committing the answer. Check an existing submission ID before rejecting a stale version. Return the latest session on a version conflict. Settle SRS exactly once when completed or actively ended; save-and-exit does not settle.
-3. Preserve frozen selections, answers, choices, seed/state, and scheduler version. Test concurrent submissions from desktop/mobile and recovery after refresh before enabling real sync.
-4. Implement server-only DeepL translation and usage retrieval. Send only the requested text and its sentence context, with the correct source language and English target. Never pretranslate an article, infer readings/lemmas/POS, or leak the key.
-5. Scope caches and deduplicated requests to user/language/text/sentence; label machine results and let the user revise/add them to Vocabulary. Treat provider failure, exhausted allowance, and stale Reading versions as recoverable conditions with manual entry still available.
-6. Read the actual account allowance. The product specifies the new API Developer free allowance as a cumulative 1,000,000 characters with no reset; verify the connected plan and current usage response rather than hardcoding a monthly assumption. Never switch automatically to a paid plan. Discard development placeholder cache rows during migration.
+Implementation commit: **`426791aa05c4e3d30917ef27d3bb8ee591ee45c0`** on `main`, successfully pushed to [ShuaiLn/NingLingo](https://github.com/ShuaiLn/NingLingo). The report is recorded in a subsequent documentation commit. No feature branch, force push, or secret commit was used; the remote was fetched/reconciled before pushing.
 
-Official references for the connected implementation: [Supabase Next.js SSR](https://supabase.com/docs/guides/auth/server-side/nextjs), [DeepL translation request](https://developers.deepl.com/api-reference/translate/request-translation), and [DeepL API plans](https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans). These integrations have not been executed in this stage.
+**Vercel: not deployed; no production URL verified.** No connected Vercel account/project or CLI token was available. `vercel.json`, Next.js build settings, ignored local project files, and production environment documentation are prepared. GitHub's `main` must be connected to the accessible Vercel project, then deployment/build/runtime and live flows verified. Supabase Auth URL configuration follows the actual domain.
 
-## Proposed migration order
+Required Vercel production variable names are **`NEXT_PUBLIC_SUPABASE_URL`**, **`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`**, **`SUPABASE_SECRET_KEY`**, **`DEEPL_API_KEY`**, **`DEEPL_API_BASE_URL`**. Only the first two are browser-public. Do not set the local mock-mode switch in production. `SUPABASE_ACCESS_TOKEN` is an operator-only migration credential and is not required by the deployed app.
 
-1. Profile/language/status constraints and ownership keys.
-2. Vocabulary lists/entries/accepted answers and word progress.
-3. Quiz snapshots/questions/attempts/reservations/settlements and activity.
-4. Readings/body versions/annotations/contextual translation cache.
-5. Versioned Grammar content/source/review tables and user progress.
-6. Ownership foreign keys, indexes, grants, RLS policies, and transactional RPCs; verify isolation using two test users before importing personal data.
-7. Provision the personal account, replace mock adapters/provider, import explicitly approved local data, and test timezone/concurrency/idempotency/CSV rollback/provider failure end to end.
-8. Import/review all 240 licensed production lessons, then complete the original full acceptance journey. GitHub setup and Vercel deployment require the owner to connect/configure them in a later stage.
+Exact remaining external inputs/actions:
 
-## Remaining decisions and acceptance
+1. Supply authorized Supabase SQL/Management access to apply migrations 001?011 and configure public signup off. Existing publishable/secret Data API keys cannot perform those actions. Then import drafts and re-run full live persistence/RLS verification.
+2. Supply the intended personal-account identity/private password securely or use the prepared interactive provisioner; no permanent account currently exists.
+3. Supply Vercel account/project access to connect the repository, configure the five production variables, deploy, inspect logs, verify the real URL, and finish Supabase URL settings.
+4. Complete genuine human review/corrections for all 240 grammar lessons and publish approved immutable versions with actual reviewer/date records.
 
-Choose the connected Supabase project/region and provisioned personal account, approve local-to-cloud import, supply DeepL credentials/verified plan, and arrange human reviewers and licensed source versions for all 240 Grammar lessons. Validate real device voices, cross-device resume, Auth redirects, RLS isolation, and actual DeepL quota/error responses once those services are connected. No production lesson review or cloud/device synchronization is claimed by the local stage.
-
-The production content plan remains: [OpenJLPT](https://github.com/evanclan/OpenJLPT) candidates with CC BY-SA 4.0 attribution for Japanese, [Wikibooks Spanish](https://en.wikibooks.org/wiki/Spanish/Contents), and the [Kallipos beginner Greek grammar](https://repository-web.kallipos.gr/handle/11419/4393) as references. Optional [Tatoeba](https://tatoeba.org/en/terms_of_use) direct translation pairs must retain both authors and each sentence's license. Pin source versions and record `draft → reviewed → published`; do not treat generated development samples as reviewed production content.
+No known local implementation/test/build failures remain. The cloud-backed acceptance flow and complete v1 publication remain explicitly unverified until these external prerequisites are resolved.
