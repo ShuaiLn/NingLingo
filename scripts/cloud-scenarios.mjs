@@ -26,6 +26,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
       // Playwright's raw exception includes authentication Cookie headers.
       throw new Error(`${operation}: the authenticated request failed or exceeded ${timeout / 1000} seconds. Inspect the local server log; request headers are withheld.`);
     }
+    if (!response.headers()['content-type']?.includes('application/json')) throw new Error(`${operation}: expected JSON, received HTTP ${response.status()} with a non-JSON response. Response body/headers withheld.`);
     const body = await response.json();
     check(response.status() === status, `${operation}: expected HTTP ${status}, received ${response.status()} (${body.error ?? 'no error'})`);
     return status === 200 ? body.data : body;
@@ -58,7 +59,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   const authResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY } });
   check(authResponse.ok, 'Live Auth settings are unavailable');
   const authSettings = await authResponse.json();
-  const signupInitiallyDisabled = authSettings.disable_signup === true;
+  check(authSettings.disable_signup === false, 'Public signup must remain intentionally enabled');
   check(authSettings.external?.email === true, 'Email/password Auth is disabled');
   const signedInPage = await signIn(context, a);
   const browserRequestStatus = await signedInPage.evaluate(async () => (await fetch('/api/repository', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'settings.profile', args: {} }) })).status);
@@ -79,7 +80,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
     const value = await database(admin.rpc('nl_learning_date', { p_user_id: a.id, p_at: instant }), 'Learning-day boundary RPC');
     check(value === expected, 'Cloud learning-day calculation ignored the timezone boundary');
   }
-  console.log(`Cloud settings/Auth: cookie sessions, device sync and timezone boundaries passed; signup ${signupInitiallyDisabled ? 'disabled' : 'configuration requires correction'}.`);
+  console.log('Cloud settings/Auth: cookie sessions, device sync and timezone boundaries passed; public signup intentionally enabled.');
 
   const list = await api('vocabulary.createList', { language: 'ja', name: 'Cloud verification' });
   const renamed = await api('vocabulary.renameList', { id: list.id, name: 'Cloud verification renamed' });
@@ -233,6 +234,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   await lookup({ ...reading, version: 1 }, 0, 1, 400);
   try {
     await request(context, 'reading.save', { input: { language: 'ja', title: reading.title, body: reading.body, status: 'finished' }, id: reading.id, expectedBodyVersion: 1 }, 400, undefined, 8000);
+    console.log('Cloud migration 012: stale Reading save rejected promptly (HTTP 400).');
   } catch {
     integrationIssues.push('Reading stale-save RPC did not reject promptly. Apply database/migrations/012_reading_conflict_errors.sql; the currently applied 40001 error triggers PostgREST retries.');
     // Removing this disposable reading stops the retry loop on its next ownership check.
@@ -243,6 +245,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   await api('reading.save', { input: { language: 'ja', title: staleAnnotationFixture.title, body: '犬がいます。', status: 'reading' }, id: staleAnnotationFixture.id, expectedBodyVersion: 1 });
   try {
     await request(context, 'reading.annotate', { readingId: staleAnnotationFixture.id, bodyVersion: 1, start: 0, end: 1, text: '犬', translation: 'dog', reading: '', vocabularyEntryId: null }, 400, undefined, 8000);
+    console.log('Cloud migration 012: stale Reading annotation rejected promptly (HTTP 400).');
   } catch {
     integrationIssues.push('Reading stale-annotation RPC did not reject promptly. The same migration 012 corrects its non-retryable error code.');
   } finally {
@@ -286,15 +289,13 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
     }
     check((await api('grammar.points', { language })).length === 0, 'Production listing exposed unpublished draft lessons');
   }
-  const unchangedImport = await database(admin.rpc('nl_import_grammar', { p_points: content }), 'Idempotent draft import');
-  check(unchangedImport.imported === 0 && unchangedImport.unchanged === 240, 'Re-import changed immutable draft content');
   const draft = content[0];
   await api('grammar.submit', { pointId: draft.id, answers: [0, 0, 0, 0, 0] }, 400);
   check((await api('grammar.progress', { language: draft.language })).length === 0, 'Draft lesson submission persisted progress');
   // An admin-only disposable row makes the grammar-progress ownership test non-vacuous.
   await database(admin.from('grammar_progress').insert({ user_id: a.id, point_id: draft.id, language: draft.language, content_version: 1, correct: 0, total: 5, completed: false }), 'Temporary grammar progress isolation fixture');
   check((await request(secondDevice, 'grammar.progress', { language: draft.language })).length === 1, 'Grammar progress did not persist for its owner');
-  console.log('Cloud Grammar: all 240 drafts persisted, repeat import unchanged, no review records or published visibility.');
+  console.log('Cloud Grammar: all 240 drafts persisted, no content re-import, review records or published visibility.');
 
   const cloudPage = await context.newPage();
   const currentEntries = await api('vocabulary.entries', { language: 'ja' });
@@ -326,6 +327,36 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   console.log('Cloud UI: all eight pages, Dashboard counts/accuracy/streak/resume and language-specific data passed.');
 
   const ownedTables = ['profiles','vocabulary_lists','vocabulary_entries','accepted_answers','vocabulary_examples','vocabulary_related_words','word_progress','quiz_sessions','quiz_questions','quiz_attempts','retry_reservations','review_settlements','learning_activity','readings','reading_versions','reading_annotations','translation_cache','grammar_progress'];
+  // Populate B as well: the newly registered/confirmed A must be unable to
+  // read or change an existing account's real rows, not just empty tables.
+  const bApi = (operation, args = {}, status = 200) => request(foreignContext, operation, args, status);
+  const bList = await bApi('vocabulary.createList', { language: 'ja', name: 'Other account isolation fixture' });
+  const bWord = await bApi('vocabulary.save', { input: { ...detailed, listId: bList.id, word: '他人', reading: 'たにん', translation: 'other people',
+    acceptedAnswers: detailed.acceptedAnswers.map(answer => ({ ...answer, id: randomUUID() })),
+    examples: detailed.examples.map(example => ({ ...example, id: randomUUID() })),
+    relatedWords: detailed.relatedWords.map(word => ({ ...word, id: randomUUID() })),
+  } });
+  const bOtherWord = await bApi('vocabulary.save', { input: { ...inputs[1], listId: bList.id } });
+  const bCompleted = await bApi('quiz.create', { language: 'ja', wordIds: [bWord.id], type: 'typing', randomSeed: 90210 });
+  await bApi('quiz.answer', { id: bCompleted.id, answer: 'other people', version: bCompleted.version, submissionId: randomUUID() });
+  const bPending = await bApi('quiz.create', { language: 'ja', wordIds: [bWord.id, bOtherWord.id], type: 'typing', randomSeed: 90211 });
+  await bApi('quiz.answer', { id: bPending.id, answer: 'deliberately incorrect', version: bPending.version, submissionId: randomUUID() });
+  let bReading = await bApi('reading.save', { input: { language: 'ja', title: 'Other account document', body: '他人。', status: 'unread' } });
+  bReading = await bApi('reading.save', { input: { language: 'ja', title: bReading.title, body: '他人がいます。', status: 'reading' }, id: bReading.id, expectedBodyVersion: 1 });
+  await bApi('reading.annotate', { readingId: bReading.id, bodyVersion: bReading.version, start: 0, end: 2, text: '他人', translation: 'other people', reading: 'たにん', vocabularyEntryId: bWord.id });
+  await database(admin.from('translation_cache').insert({ user_id: b.id, language: 'ja', text: '他人', context: bReading.body, translation: 'protected B cache', source: 'deepl' }), 'Other account protected cache fixture');
+  await database(admin.from('grammar_progress').insert({ user_id: b.id, point_id: draft.id, language: draft.language, content_version: 1, correct: 0, total: 5, completed: false }), 'Other account grammar progress fixture');
+  for (const table of ownedTables) {
+    const fixture = await b.client.from(table).select('*').eq('user_id', b.id).limit(1);
+    check(!fixture.error && fixture.data.length === 1, `Reverse RLS ${table}: other-account fixture missing`);
+    const foreign = await a.client.from(table).select('*').eq('user_id', b.id);
+    check(!foreign.error && foreign.data.length === 0, `Reverse RLS ${table}: new account A read B data`);
+  }
+  await api('vocabulary.save', { input: { ...detailed, listId: bList.id }, id: bWord.id }, 400);
+  await api('quiz.session', { id: bPending.id }, 400);
+  await lookup(bReading, 0, 2, 400);
+  const reverseUpdate = await a.client.from('vocabulary_lists').update({ name: 'forbidden new-user mutation' }).eq('id', bList.id).select();
+  check(!reverseUpdate.error && reverseUpdate.data.length === 0, 'New account A modified B data');
   const grammarTables = ['grammar_points','grammar_versions','grammar_examples','grammar_exercises','grammar_sources','grammar_reviews'];
   const anonymous = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   for (const table of ownedTables) {
@@ -356,9 +387,13 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   await request(foreignContext, 'quiz.session', { id: nextB.id }, 400);
   await lookup(reading, 0, 3, 400, foreignContext);
   const forbiddenQuizRpc = await a.client.rpc('nl_commit_quiz', { p_user_id: a.id, p_session_id: nextB.id, p_expected_version: nextB.version, p_state: nextB });
-  check(Boolean(forbiddenQuizRpc.error), 'Authenticated client could execute the privileged quiz RPC');
+  check(forbiddenQuizRpc.error?.code === '42501', 'Authenticated client was not denied execution of the privileged quiz RPC');
+  const forbiddenCreation = await a.client.rpc('nl_create_quiz', { p_user_id: a.id, p_state: {} });
+  check(forbiddenCreation.error?.code === '42501', 'Authenticated client was not denied execution of the privileged quiz creation RPC');
   const forbiddenImport = await a.client.rpc('nl_import_grammar', { p_points: [] });
-  check(Boolean(forbiddenImport.error), 'Authenticated client could import grammar');
+  check(forbiddenImport.error?.code === '42501', 'Authenticated client was not denied execution of the privileged grammar import RPC');
+  const forbiddenReview = await a.client.from('grammar_reviews').insert({ point_id: draft.id, content_version: 1, reviewer_name: 'forged', reviewed_at: new Date().toISOString().slice(0, 10), human_review: true });
+  check(forbiddenReview.error?.code === '42501', 'Authenticated client could forge human grammar review or the test payload was invalid');
   const forbiddenPublication = await a.client.from('grammar_versions').update({ status: 'published' }).eq('point_id', draft.id);
   check(Boolean(forbiddenPublication.error), 'Authenticated client could publish grammar');
   const crossOrigin = await context.request.post(`${base}/api/repository`, { headers: { Origin: 'https://untrusted.invalid' }, data: { operation: 'settings.profile', args: {} } });
@@ -380,7 +415,6 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   const finalAuthResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY } });
   check(finalAuthResponse.ok, 'Final Auth configuration probe failed');
   const finalAuthSettings = await finalAuthResponse.json();
-  const configurationIssues = finalAuthSettings.disable_signup === true ? [] : ['The configured Supabase project still reports disable_signup=false; disable Allow new users to sign up and save the Auth configuration.'];
-  if (!configurationIssues.length) check(true, 'Public signup is disabled');
-  return { issues: [...integrationIssues, ...configurationIssues] };
+  check(finalAuthSettings.disable_signup === false, 'Public signup was unexpectedly disabled');
+  return { issues: integrationIssues };
 }

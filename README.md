@@ -1,6 +1,6 @@
 # NingLingo
 
-A private language-learning workspace for Japanese (`ja`), Spanish (`es`), and Modern Greek (`el`), with English UI and explanations. Next.js App Router, TypeScript, Tailwind, Supabase Cloud, and server-side DeepL.
+A language-learning workspace with isolated accounts for Japanese (`ja`), Spanish (`es`), and Modern Greek (`el`), with English UI and explanations. Next.js App Router, TypeScript, Tailwind, Supabase Cloud, and server-side DeepL.
 
 ## Run
 
@@ -8,7 +8,9 @@ Use Node.js 22.12+ and npm. Install pinned dependencies with `npm ci`, configure
 
 The cloud database must first receive the ordered migrations. `npm run db:check` validates migration files; `npm run db:migrate` applies them with a Supabase Management API token. The supplied project secret is a Data API credential and cannot execute DDL. No Docker or local Supabase is required. See [database documentation](database/README.md).
 
-Create the personal account with `node scripts/provision-account.mjs` in an interactive terminal after migrations. Its password input is hidden. Public signup must be disabled in Supabase Auth settings. There is no signup UI, social login, or automatic email invitation.
+Public email/password signup is intentionally enabled (`disable_signup=false`). Create an account at `/signup`, follow the confirmation email when required, and sign in at `/login`. The Auth insert trigger initializes an isolated profile with timezone `America/Tijuana` and all three language preferences. There is no social login. The optional `node scripts/provision-account.mjs` administrator utility remains available with hidden password input.
+
+Allow the app's `/auth/callback` URL in Supabase Auth redirect settings for each actual app origin. The default confirmation email supports the PKCE callback; open it in the browser that initiated signup. A custom SSR confirmation template can instead link to `/auth/confirm?token_hash={{ .TokenHash }}&type=signup`. Email delivery must have sufficient capacity for public registrations; the app retains clear errors for SMTP/rate/service failures. It never disables confirmation to bypass delivery failures.
 
 To use the preserved local/mock workspace, explicitly set `NINGLINGO_REPOSITORY_MODE=local` for your development process. This mode is disabled on Vercel. Development browser data remains separate from cloud accounts and is never silently uploaded. The existing browser tests explicitly select this mode.
 
@@ -32,10 +34,11 @@ npm run test:e2e
 npm run grammar:validate
 npm run build
 npm run security:bundle
+node scripts/check-repository-secrets.mjs
 npm run test:cloud
 ```
 
-Unit/repository tests include embedded PostgreSQL executing the checked-in migrations with Supabase identity stubs, ownership isolation, transactional imports, CAS/idempotency, SRS, and draft isolation. Embedded tests do not imply Cloud migrations were applied. Existing E2E tests plus Vocabulary extension tests use installed Microsoft Edge, isolated profiles, and local repositories. `test:cloud` creates two temporary confirmed accounts, tests live cookie authentication and cloud ownership, then removes its accounts even on failure. It reports missing cloud migrations as a failure rather than claiming integration passed.
+Unit/repository tests include embedded PostgreSQL executing the checked-in migrations with Supabase identity stubs, ownership isolation, transactional imports, CAS/idempotency, SRS, and draft isolation. Embedded tests do not imply Cloud migrations were applied. Existing E2E tests plus Vocabulary extension tests use installed Microsoft Edge, isolated profiles, and local repositories. After `npm run build`, `test:cloud` starts the production server, attempts real public signup with a disposable reserved-domain email, verifies confirmation/provisioning/cookie sessions, and tests live persistence and populated ownership isolation in both directions for two temporary accounts. An admin-generated confirmation fixture keeps independent checks running if email delivery fails. The exact `429 over_email_send_rate_limit` is reported as an external custom-SMTP prerequisite after the Auth architecture checks pass; every other integration failure still exits nonzero. This does not claim successful public registration/inbox delivery. All temporary accounts/data are removed, existing accounts are preserved, and the 240 drafts are only read, never regenerated or published.
 
 ## Architecture
 
