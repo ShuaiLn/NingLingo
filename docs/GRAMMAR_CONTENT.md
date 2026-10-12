@@ -1,5 +1,20 @@
 # Grammar content pipeline
 
+## Current production release
+
+The project owner confirmed human review of all 240 lessons, approved every lesson as correct, and requested production publication. The release records the supplied reviewer signature **ning lu** and review date **2026-10-11** in [`content/grammar/releases/2026-10-11-v2.json`](../content/grammar/releases/2026-10-11-v2.json). Every lesson is `published`, has `contentVersion: 2`, and retains its original explanation, examples, exercises, and source attribution. The version 1 draft files and manifest remain unchanged.
+
+Validate or publish this exact release from the repository root:
+
+```sh
+npm run grammar:import -- --reviewed-file=content/grammar/releases/2026-10-11-v2.json --validate-only
+npm run grammar:import -- --reviewed-file=content/grammar/releases/2026-10-11-v2.json
+```
+
+The second command writes to the configured Supabase project using the existing server-only credential. Identical imports are idempotent. Automated checks verify structure and persistence; the human-review record reflects the owner's explicit confirmation, not a claim that automated validation performed the review.
+
+## Original draft preparation
+
 The v1 target is prepared as 100 Japanese, 80 Spanish, and 60 Modern Greek lessons. All 240 are **draft** records with `reviewer: null`, `contentVersion: 1`, and `developmentSeed: false`. They are production-schema content candidates rather than development sample lessons. They are not represented as reviewed or published.
 
 Each lesson has an English explanation, formation, three translated examples, five single-answer exercises with explanations, stable language-prefixed IDs, attribution/license metadata, and modification notes. Spanish and Greek have three explicitly authored contextual cloze questions and two application/contrast questions. Japanese adapts source examples and adds translation, formation, and meaning questions. Structural QA cannot establish native-speaker correctness or prove every distractor is semantically unambiguous; those checks remain part of human review.
@@ -42,3 +57,7 @@ Ordinary learner repositories read **published** content only. Empty published c
 For the first release, a qualified human must review each lesson against its cited reference, correct language/naturalness/translation and distractor ambiguity, record the actual reviewer and review date, and document modifications. Publish only after the required lesson checks and genuine review records exist. Do not copy a source textbook reviewer into NingLingo metadata or label automated validation as human review. Revised content uses a new immutable content version; learner progress remains tied to the version they actually completed.
 
 After actual review, an operator may import a JSON array of approved lessons with `node --experimental-strip-types scripts/grammar-import.mjs --reviewed-file=path/to/approved-lessons.json` (append `--validate-only` to check without writing). This explicit path requires unique lessons, version 2 or later, real reviewer/date metadata, and reviewed/published status. The initial pinned draft files stay unchanged. The database transaction checks the same content structure and publication metadata; metadata alone is never described as proof that a human actually performed the review.
+
+For a later review, copy the chosen lessons into a separate JSON array, check the explanation and formation, all translated examples, every question and answer choice, the intended answer, and source attribution. Record the actual reviewer and date, document corrections in `modificationNotes`, increment `contentVersion` beyond the latest imported version, and set `status: "published"` when approved for learners. `correctIndex` is zero-based. Validate the file before importing it.
+
+`reviewed` content is still hidden from learners. Status is part of the immutable version: importing version 2 as `reviewed` and later changing it to `published` requires version 3. Importing a newer draft or review-only version also advances the current version and hides the older published lesson, so prepare review changes offline and import the final approved version when ready. The learner page has no administrative review control; publication uses this CLI. Unknown or duplicate CLI flags are rejected.

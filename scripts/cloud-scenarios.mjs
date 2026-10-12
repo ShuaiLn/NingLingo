@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createClient } from '@supabase/supabase-js';
+import { expect } from '@playwright/test';
 
 // Administrative fixtures belong exclusively to disposable verification users.
 // This runner never edits an owner's data or changes grammar publication/review status.
@@ -81,6 +82,25 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
     check(value === expected, 'Cloud learning-day calculation ignored the timezone boundary');
   }
   console.log('Cloud settings/Auth: cookie sessions, device sync and timezone boundaries passed; public signup intentionally enabled.');
+
+  check((await api('vocabulary.lists', { language: 'ja' })).length === 0 && (await api('vocabulary.entries', { language: 'ja' })).length === 0, 'First-word onboarding needs an empty Japanese workspace');
+  await signedInPage.goto(`${base}/ja/vocabulary`);
+  await expect(signedInPage.getByRole('button', { name: '+ Add word', exact: true })).toBeEnabled({ timeout: 60000 });
+  await signedInPage.getByRole('button', { name: '+ Add word', exact: true }).click();
+  await signedInPage.getByLabel('Word *', { exact: true }).fill('こんにちは');
+  await signedInPage.getByLabel('English meaning *', { exact: true }).fill('hello');
+  await signedInPage.getByLabel('First list name').fill('First cloud word');
+  await signedInPage.getByRole('button', { name: 'Save word', exact: true }).click();
+  await expect(signedInPage.locator('.vocabulary-table tbody tr')).toHaveCount(1, { timeout: 60000 });
+  const firstLists = await api('vocabulary.lists', { language: 'ja' });
+  const firstWords = await request(secondDevice, 'vocabulary.entries', { language: 'ja' });
+  check(firstLists.length === 1 && firstLists[0].name === 'First cloud word' && firstWords.length === 1 && firstWords[0].listId === firstLists[0].id && firstWords[0].word === 'こんにちは', 'First-word onboarding did not persist its word/list across devices');
+  await signedInPage.reload();
+  await expect(signedInPage.locator('.vocabulary-table tbody tr')).toHaveCount(1, { timeout: 60000 });
+  await expect(signedInPage.getByRole('button', { name: 'Import CSV', exact: true })).toBeEnabled();
+  await api('vocabulary.deleteList', { id: firstLists[0].id });
+  check((await api('vocabulary.entries', { language: 'ja' })).length === 0, 'Disposable first-word onboarding fixture did not cascade on list deletion');
+  console.log('Cloud vocabulary onboarding: an empty workspace saved its first word/list, synced across devices and survived reload.');
 
   const list = await api('vocabulary.createList', { language: 'ja', name: 'Cloud verification' });
   const renamed = await api('vocabulary.renameList', { id: list.id, name: 'Cloud verification renamed' });
@@ -276,26 +296,57 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   check(finishedReading.status === 'finished' && finishedReading.version === reading.version, 'Reading status edit changed the body version');
   console.log('Cloud Reading/DeepL: annotation/vocabulary/cache/provider priority, contexts, deduplication, versions and accents passed.');
 
-  const content = (await Promise.all(['ja', 'es', 'el'].map(async language => JSON.parse(await readFile(new URL(`../content/grammar/generated/${language}.json`, import.meta.url), 'utf8'))))).flat();
-  for (const language of ['ja', 'es', 'el']) {
-    const ids = content.filter(point => point.language === language).map(point => point.id);
+  const drafts = (await Promise.all(['ja', 'es', 'el'].map(async language => JSON.parse(await readFile(new URL(`../content/grammar/generated/${language}.json`, import.meta.url), 'utf8'))))).flat();
+  const release = JSON.parse(await readFile(new URL('../content/grammar/releases/2026-10-11-v2.json', import.meta.url), 'utf8'));
+  check(drafts.length === 240 && release.length === 240 && release.every(point => point.status === 'published' && point.contentVersion === 2 && !point.developmentSeed && point.reviewer?.name === 'ning lu' && point.reviewer?.date === '2026-10-11'), 'Reviewed release metadata differs from the approved 240-lesson release');
+  const expectedGrammarRows = {
+    grammar_points: release.length,
+    grammar_versions: release.length,
+    grammar_examples: release.reduce((count, point) => count + point.examples.length, 0),
+    grammar_exercises: release.reduce((count, point) => count + point.exercises.length, 0),
+    grammar_sources: release.reduce((count, point) => count + point.sources.length, 0),
+    grammar_reviews: release.length,
+  };
+  const byId = points => [...points].sort((left, right) => left.id.localeCompare(right.id));
+  const learnerPoint = point => ({ ...point, examples: point.examples.map(example => ({ ...example, reading: example.reading ?? null })) });
+  for (const [language, expectedCount] of [['ja', 100], ['es', 80], ['el', 60]]) {
+    const draftPoints = drafts.filter(point => point.language === language);
+    const approvedPoints = release.filter(point => point.language === language);
+    check(draftPoints.length === expectedCount && approvedPoints.length === expectedCount, `${language}: approved release lesson count changed`);
+    const ids = approvedPoints.map(point => point.id);
+    assert.deepEqual([...ids].sort(), draftPoints.map(point => point.id).sort());
     const stored = await database(admin.from('grammar_points').select('id,language,current_version').in('id', ids), `${language} cloud grammar`);
-    const versions = await database(admin.from('grammar_versions').select('point_id,status,content_version').in('point_id', ids), `${language} draft versions`);
-    const reviews = await database(admin.from('grammar_reviews').select('point_id').in('point_id', ids), `${language} review metadata`);
-    check(stored.length === ids.length && versions.length === ids.length && versions.every(version => version.status === 'draft' && version.content_version === 1) && reviews.length === 0, `${language}: grammar was not imported strictly as unreviewed drafts`);
-    for (const [table, perLesson] of [['grammar_examples', 3], ['grammar_exercises', 5]]) {
-      const count = await admin.from(table).select('point_id', { count: 'exact', head: true }).in('point_id', ids);
-      check(!count.error && count.count === ids.length * perLesson, `${language}: stored ${table} count differs from the validated dataset`);
+    const versions = await database(admin.from('grammar_versions').select('point_id,status,content_version,manifest').in('point_id', ids), `${language} grammar versions`);
+    const reviews = await database(admin.from('grammar_reviews').select('point_id,content_version,reviewer_name,reviewed_at,human_review').in('point_id', ids), `${language} review metadata`);
+    check(stored.length === ids.length && stored.every(point => point.current_version === 2 && point.language === language) && versions.length === ids.length * 2, `${language}: current/versioned grammar differs from the reviewed release`);
+    const originalVersions = versions.filter(version => version.content_version === 1);
+    const publishedVersions = versions.filter(version => version.content_version === 2);
+    check(originalVersions.length === ids.length && originalVersions.every(version => version.status === 'draft') && publishedVersions.length === ids.length && publishedVersions.every(version => version.status === 'published'), `${language}: draft history or publication status changed`);
+    assert.deepEqual(byId(originalVersions.map(version => version.manifest)), byId(draftPoints));
+    assert.deepEqual(byId(publishedVersions.map(version => version.manifest)), byId(approvedPoints));
+    check(reviews.length === ids.length && new Set(reviews.map(review => review.point_id)).size === ids.length && reviews.every(review => review.content_version === 2 && review.reviewer_name === 'ning lu' && review.reviewed_at === '2026-10-11' && review.human_review === true), `${language}: human review records differ from the approved release`);
+    for (const [contentVersion, points] of [[1, draftPoints], [2, approvedPoints]]) {
+      for (const [table, property] of [['grammar_examples', 'examples'], ['grammar_exercises', 'exercises'], ['grammar_sources', 'sources']]) {
+        const count = await admin.from(table).select('point_id', { count: 'exact', head: true }).in('point_id', ids).eq('content_version', contentVersion);
+        check(!count.error && count.count === points.reduce((total, point) => total + point[property].length, 0), `${language} v${contentVersion}: stored ${table} count differs from the validated dataset`);
+      }
     }
-    check((await api('grammar.points', { language })).length === 0, 'Production listing exposed unpublished draft lessons');
+    const visible = await api('grammar.points', { language });
+    assert.deepEqual(byId(visible), byId(approvedPoints.map(learnerPoint)));
+    check(visible.length === expectedCount, `${language}: production listing omitted approved lessons or exposed draft versions`);
+    const point = approvedPoints[0];
+    check((await database(a.client.rpc('nl_grammar_is_published', { p_id: point.id, p_version: 1 }), `${language} draft publication check`)) === false, `${language}: original draft was treated as published`);
+    check((await database(a.client.rpc('nl_grammar_is_published', { p_id: point.id, p_version: 2 }), `${language} release publication check`)) === true, `${language}: reviewed release was unavailable to learners`);
+    check((await api('grammar.progress', { language })).length === 0, `${language}: new learner has unexpected grammar progress`);
+    await api('grammar.submit', { pointId: point.id, answers: point.exercises.slice(1).map(exercise => exercise.correctIndex) }, 400);
+    check((await api('grammar.progress', { language })).length === 0, `${language}: an incomplete submission persisted progress`);
+    const progress = await api('grammar.submit', { pointId: point.id, answers: point.exercises.map(exercise => exercise.correctIndex) });
+    check(progress.pointId === point.id && progress.userId === a.id && progress.contentVersion === 2 && progress.correct === point.exercises.length && progress.total === point.exercises.length && progress.completed, `${language}: approved lesson practice did not persist correctly`);
+    const syncedProgress = await request(secondDevice, 'grammar.progress', { language });
+    check(syncedProgress.length === 1 && syncedProgress[0].pointId === point.id && syncedProgress[0].contentVersion === 2 && syncedProgress[0].completed, `${language}: published grammar progress did not sync to the second device`);
   }
-  const draft = content[0];
-  await api('grammar.submit', { pointId: draft.id, answers: [0, 0, 0, 0, 0] }, 400);
-  check((await api('grammar.progress', { language: draft.language })).length === 0, 'Draft lesson submission persisted progress');
-  // An admin-only disposable row makes the grammar-progress ownership test non-vacuous.
-  await database(admin.from('grammar_progress').insert({ user_id: a.id, point_id: draft.id, language: draft.language, content_version: 1, correct: 0, total: 5, completed: false }), 'Temporary grammar progress isolation fixture');
-  check((await request(secondDevice, 'grammar.progress', { language: draft.language })).length === 1, 'Grammar progress did not persist for its owner');
-  console.log('Cloud Grammar: all 240 drafts persisted, no content re-import, review records or published visibility.');
+  const lesson = release[0];
+  console.log('Cloud Grammar: 240 original drafts preserved; reviewed v2 release, 100/80/60 learner listings and published practice/device sync passed without content mutations.');
 
   const cloudPage = await context.newPage();
   const currentEntries = await api('vocabulary.entries', { language: 'ja' });
@@ -316,15 +367,29 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
     // alerts represent application load failures.
     const alerts = await cloudPage.locator('main.page-content').getByRole('alert').allTextContents();
     check(alerts.length === 0, `${path}: production page reported a cloud load error (${alerts.join('; ')})`);
+    if (path === 'grammar') {
+      await expect(cloudPage.locator('.lesson-card')).toHaveCount(100, { timeout: 60000 });
+      await expect(cloudPage.getByText('These lessons have passed human review and are published for study.', { exact: true })).toBeVisible();
+      await expect(cloudPage.getByText('1 / 100 completed', { exact: true })).toBeVisible();
+    }
   }
-  for (const language of ['es', 'el']) {
+  for (const [language, expectedCount] of [['es', 80], ['el', 60]]) {
     await cloudPage.goto(`${base}/${language}`);
     await cloudPage.getByRole('heading', { name: 'Welcome back, Cloud verification.' }).waitFor();
     const languageEntries = await api('vocabulary.entries', { language });
     check(await cloudPage.locator('.stat-card').filter({ hasText: 'Words collected' }).locator('.stat-value').innerText() === String(languageEntries.length), `${language}: Dashboard mixed language vocabulary`);
+    await cloudPage.goto(`${base}/${language}/grammar`);
+    await expect(cloudPage.locator('.lesson-card')).toHaveCount(expectedCount, { timeout: 60000 });
+    await expect(cloudPage.getByText(`1 / ${expectedCount} completed`, { exact: true })).toBeVisible();
+    await expect(cloudPage.getByText('These lessons have passed human review and are published for study.', { exact: true })).toBeVisible();
   }
+  await cloudPage.goto(`${base}/${lesson.language}/grammar/${lesson.id}`);
+  await expect(cloudPage.getByRole('heading', { name: lesson.title, exact: true })).toBeVisible({ timeout: 60000 });
+  await expect(cloudPage.locator('.grammar-example')).toHaveCount(lesson.examples.length);
+  await expect(cloudPage.locator('.grammar-exercise')).toHaveCount(lesson.exercises.length);
+  await expect(cloudPage.getByText('Status: published · Version: 2 · Reviewer: ning lu, 2026-10-11', { exact: true })).toBeVisible();
   await cloudPage.close();
-  console.log('Cloud UI: all eight pages, Dashboard counts/accuracy/streak/resume and language-specific data passed.');
+  console.log('Cloud UI: all eight pages, Dashboard counts/accuracy/streak/resume, 100/80/60 published Grammar listings and reviewed lesson details passed.');
 
   const ownedTables = ['profiles','vocabulary_lists','vocabulary_entries','accepted_answers','vocabulary_examples','vocabulary_related_words','word_progress','quiz_sessions','quiz_questions','quiz_attempts','retry_reservations','review_settlements','learning_activity','readings','reading_versions','reading_annotations','translation_cache','grammar_progress'];
   // Populate B as well: the newly registered/confirmed A must be unable to
@@ -345,7 +410,7 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   bReading = await bApi('reading.save', { input: { language: 'ja', title: bReading.title, body: '他人がいます。', status: 'reading' }, id: bReading.id, expectedBodyVersion: 1 });
   await bApi('reading.annotate', { readingId: bReading.id, bodyVersion: bReading.version, start: 0, end: 2, text: '他人', translation: 'other people', reading: 'たにん', vocabularyEntryId: bWord.id });
   await database(admin.from('translation_cache').insert({ user_id: b.id, language: 'ja', text: '他人', context: bReading.body, translation: 'protected B cache', source: 'deepl' }), 'Other account protected cache fixture');
-  await database(admin.from('grammar_progress').insert({ user_id: b.id, point_id: draft.id, language: draft.language, content_version: 1, correct: 0, total: 5, completed: false }), 'Other account grammar progress fixture');
+  await bApi('grammar.submit', { pointId: lesson.id, answers: lesson.exercises.map(exercise => exercise.correctIndex) });
   for (const table of ownedTables) {
     const fixture = await b.client.from(table).select('*').eq('user_id', b.id).limit(1);
     check(!fixture.error && fixture.data.length === 1, `Reverse RLS ${table}: other-account fixture missing`);
@@ -372,9 +437,16 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
     }
   }
   for (const table of grammarTables) {
-    const visible = await a.client.from(table).select('*');
-    check(!visible.error && visible.data.length === 0, `RLS ${table}: draft metadata leaked`);
-    const unauthenticated = await anonymous.from(table).select('*');
+    const idColumn = table === 'grammar_points' ? 'id' : 'point_id';
+    const visible = await a.client.from(table).select(idColumn, { count: 'exact', head: true }).in(idColumn, release.map(point => point.id));
+    check(!visible.error && visible.count === expectedGrammarRows[table], `RLS ${table}: approved release rows were hidden or draft rows leaked`);
+    if (table !== 'grammar_points') {
+      const hiddenDrafts = await a.client.from(table).select('point_id', { count: 'exact', head: true }).in('point_id', drafts.map(point => point.id)).eq('content_version', 1);
+      check(!hiddenDrafts.error && hiddenDrafts.count === 0, `RLS ${table}: original draft metadata leaked`);
+      const publishedRows = await a.client.from(table).select('point_id', { count: 'exact', head: true }).in('point_id', release.map(point => point.id)).eq('content_version', 2);
+      check(!publishedRows.error && publishedRows.count === expectedGrammarRows[table], `RLS ${table}: published v2 rows were unavailable`);
+    }
+    const unauthenticated = await anonymous.from(table).select('*').limit(1);
     check(Boolean(unauthenticated.error), `RLS ${table}: anonymous access was granted`);
   }
   const foreignInsert = await b.client.from('vocabulary_lists').insert({ user_id: a.id, language: 'ja', name: 'Forbidden' });
@@ -392,9 +464,9 @@ export async function verifyCloudScenarios({ a, b, admin, base, browser, context
   check(forbiddenCreation.error?.code === '42501', 'Authenticated client was not denied execution of the privileged quiz creation RPC');
   const forbiddenImport = await a.client.rpc('nl_import_grammar', { p_points: [] });
   check(forbiddenImport.error?.code === '42501', 'Authenticated client was not denied execution of the privileged grammar import RPC');
-  const forbiddenReview = await a.client.from('grammar_reviews').insert({ point_id: draft.id, content_version: 1, reviewer_name: 'forged', reviewed_at: new Date().toISOString().slice(0, 10), human_review: true });
+  const forbiddenReview = await a.client.from('grammar_reviews').insert({ point_id: lesson.id, content_version: 1, reviewer_name: 'forged', reviewed_at: new Date().toISOString().slice(0, 10), human_review: true });
   check(forbiddenReview.error?.code === '42501', 'Authenticated client could forge human grammar review or the test payload was invalid');
-  const forbiddenPublication = await a.client.from('grammar_versions').update({ status: 'published' }).eq('point_id', draft.id);
+  const forbiddenPublication = await a.client.from('grammar_versions').update({ status: 'published' }).eq('point_id', lesson.id).eq('content_version', 1);
   check(Boolean(forbiddenPublication.error), 'Authenticated client could publish grammar');
   const crossOrigin = await context.request.post(`${base}/api/repository`, { headers: { Origin: 'https://untrusted.invalid' }, data: { operation: 'settings.profile', args: {} } });
   check(crossOrigin.status() === 403, 'Cross-origin mutation was accepted');
