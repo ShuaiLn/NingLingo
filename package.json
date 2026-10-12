@@ -20,7 +20,8 @@
     "grammar:validate": "node --experimental-strip-types scripts/grammar-validate.mjs",
     "grammar:import": "node --experimental-strip-types scripts/grammar-import.mjs",
     "security:bundle": "node scripts/check-client-secrets.mjs",
-    "test:cloud": "node scripts/verify-cloud.mjs"
+    "test:cloud": "node scripts/verify-cloud.mjs",
+    "test:cloud:alphabet": "node scripts/verify-alphabet-cloud.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

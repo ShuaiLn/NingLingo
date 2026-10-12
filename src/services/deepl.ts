@@ -1,6 +1,21 @@
 import type { LanguageCode, TranslationProvider } from "@/domain/models";
 interface DeepLConfig { key?: string; baseUrl?: string }
 const sourceLanguages: Record<LanguageCode, string> = { ja: "JA", es: "ES", el: "EL" };
+export const DEEPL_MAX_REQUEST_BYTES = 128 * 1024;
+/** DeepL's byte limit applies to the entire UTF-8 JSON body, not JavaScript string length. */
+export function deepLTranslationBatches(language: LanguageCode, texts: string[], context = ""): string[][] {
+  const body = (items: string[]) => ({ text: items, source_lang: sourceLanguages[language], target_lang: "EN", context: context.slice(0, 12000), preserve_formatting: true });
+  const bytes = (items: string[]) => new TextEncoder().encode(JSON.stringify(body(items))).length;
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  for (const text of texts) {
+    if (bytes([text]) > DEEPL_MAX_REQUEST_BYTES) throw new Error("This word is too large for translation. Enter an English meaning manually.");
+    if (batch.length === 25 || bytes([...batch, text]) > DEEPL_MAX_REQUEST_BYTES) { batches.push(batch); batch = []; }
+    batch.push(text);
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
 /** Instantiate on the server only. Injected configuration keeps secrets out of browser code. */
 export class DeepLTranslationProvider implements TranslationProvider {
   private usageCache: { value: { used: number; limit: number; available: boolean }; at: number } | null = null;
@@ -39,5 +54,27 @@ export class DeepLTranslationProvider implements TranslationProvider {
     if (typeof translation !== "string" || !translation.trim()) throw new Error("DeepL returned no translation. You can enter a translation manually.");
     this.usageCache = null;
     return { translation, source: "deepl" as const };
+  }
+  async translateMany(input: { userId: string; language: LanguageCode; texts: string[]; context: string }) {
+    if (input.texts.length > 25) throw new Error("Translate at most 25 unique words at a time.");
+    if (input.texts.some(text => !text.trim() || text.length > 5000)) throw new Error("Select between 1 and 5,000 characters for lookup.");
+    if (!input.texts.length) return [];
+    const usage = await this.usage();
+    const characters = input.texts.reduce((count, text) => count + [...text].length, 0);
+    if (!usage.available || usage.used + characters > usage.limit) throw new Error("DeepL character allowance is exhausted or unavailable. You can enter a translation manually.");
+    const results: { translation: string; source: "deepl"; error?: string }[] = [];
+    for (const texts of deepLTranslationBatches(input.language, input.texts, input.context)) {
+      try {
+        const data = await this.send("translate", { text: texts, source_lang: sourceLanguages[input.language], target_lang: "EN", context: input.context.slice(0, 12000), preserve_formatting: true }) as { translations?: { text?: unknown }[] };
+        if (!Array.isArray(data.translations)) throw new Error("DeepL returned an invalid response. You can enter a translation manually.");
+        // Individual failures stay unresolved without discarding earlier successful UTF-8 batches.
+        results.push(...texts.map((_, index) => ({ translation: typeof data.translations?.[index]?.text === "string" ? data.translations[index].text as string : "", source: "deepl" as const })));
+      } catch (failure) {
+        const error = failure instanceof Error ? failure.message : "DeepL translation is unavailable. You can enter a translation manually.";
+        results.push(...texts.map(() => ({ translation: "", source: "deepl" as const, error })));
+      }
+      this.usageCache = null;
+    }
+    return results;
   }
 }

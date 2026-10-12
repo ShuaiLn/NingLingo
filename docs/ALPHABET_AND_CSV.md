@@ -1,0 +1,15 @@
+# Alphabet quizzes and Vocabulary CSV
+
+Alphabet browsing retains the built-in groups, names, pronunciation hints, examples and device audio. **Start alphabet quiz** practises the current selection. Names and associations open independently; hint toggles are local UI state and do not create attempts or change scores. Saved sessions are accessible through `/<language>/alphabet?session=<uuid>` and independent Progress history.
+
+`pronunciationAnswers` contains explicit learner-facing accepted strings. Its first value is the standard pronunciation; these values are not IPA and are not inferred from letter names or explanatory hints. Input uses NFC, trimming and case normalization. The session stores complete item content, accepted answers, an explicit content version, frozen templates and retry configuration, seeds, scheduler state, questions and attempts. Existing sessions continue to use that snapshot when static content changes. Alphabet uses the existing shuffle/random/retry rules independently of Vocabulary SRS.
+
+CSV accepts `word` as its only required header/value. Optional columns remain `reading,translation,type,category,example,notes`; exports retain the existing seven-column order. The download template starts with `word,translation`. Only structurally valid rows with missing meanings are translated to English. Readings, examples, word forms, parts of speech and relationships are never generated.
+
+The preview deduplicates all unresolved NFC/trimmed words before batches of at most 25 unique queries. Case remains significant. The server repeats deduplication, reads the current account/language vocabulary cache and sends only unique misses to DeepL with empty context and target `EN`. Request bodies are also split at the UTF-8 byte limit. Results map back to every corresponding original row. Only successful nonempty results are cached, separately from Reading.
+
+Provided CSV translations remain untouched. Machine results carry a visible source and are editable. A preview generation and each row's edit revision protect against late results after manual edits (including clearing a field), closing/replacing a file or changing languages. Duplicate identity is recalculated using final `word + reading + translation` values after resolution/edits. Failed lookups show a reason and can be retried or filled manually.
+
+Confirmation imports only valid resolved rows in one atomic batch. A successful partial import keeps unresolved/invalid rows in the preview; a failed import keeps the entire preview. No vocabulary or SRS data is written during preview.
+
+Cloud persistence uses the additive migration [013_alphabet_quiz.sql](../database/migrations/013_alphabet_quiz.sql), applied to the connected project by the owner. The migration also adds the explicit translation cache namespace. Applied migrations and all Grammar content/statuses remain unchanged. See [database instructions](../database/README.md) for running disposable-account checks and [the verification report](ALPHABET_CSV_VERIFICATION.md) for results.

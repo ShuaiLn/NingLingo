@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createLocalRepositories } from "@/repositories/local";
 import { executeRepositoryOperation } from "./repository-operations";
+import { alphabetEntries } from "@/data/alphabet";
 describe("authenticated repository operation boundary", () => {
   it("validates vocabulary and imports valid entries atomically through the repository", async () => {
     const repos = createLocalRepositories();
@@ -26,5 +27,25 @@ describe("authenticated repository operation boundary", () => {
     await expect(executeRepositoryOperation(repos, "quiz.create", { language: "fr", type: "typing", wordIds: [] })).rejects.toThrow();
     await expect(executeRepositoryOperation(repos, "quiz.answer", { id: "not-a-uuid", version: 0, state: {} })).rejects.toThrow();
     await expect(executeRepositoryOperation(repos, "sql.execute", { sql: "drop table" })).rejects.toThrow("Unknown");
+  });
+  it("accepts only Alphabet IDs/answer inputs and ignores client snapshots and forged scores", async () => {
+    const repos = createLocalRepositories();
+    const b = alphabetEntries.find(item => item.language === "es" && item.symbol === "B b")!;
+    const created = await executeRepositoryOperation(repos, "alphabetQuiz.create", { language: "es", itemIds: [b.id], items: [{ itemId: b.id, pronunciationAnswers: ["be"] }], contentVersion: 999 }) as Awaited<ReturnType<typeof repos.alphabetQuiz.create>>;
+    expect(created.items[0].pronunciationAnswers).toEqual(["b"]);
+    expect(created.contentVersion).toBe(1);
+    await executeRepositoryOperation(repos, "alphabetQuiz.answer", { id: created.id, version: created.version, answer: "be", submissionId: "forged", correct: true, state: { status: "completed" } });
+    expect((await repos.alphabetQuiz.getSession(created.id)).attempts[0].correct).toBe(false);
+    await expect(executeRepositoryOperation(repos, "alphabetQuiz.resume", { id: created.id })).rejects.toThrow();
+    await expect(executeRepositoryOperation(repos, "alphabetQuiz.answer", { id: created.id, answer: " ", version: 2, submissionId: "blank" })).rejects.toThrow();
+  });
+  it("validates dedicated translation requests without requiring a Reading or creating vocabulary", async () => {
+    const repos = createLocalRepositories();
+    const entries = await repos.vocabulary.getEntries("ja");
+    const results = await executeRepositoryOperation(repos, "vocabulary.resolveTranslations", { language: "ja", rows: [{ line: 2, word: "犬" }, { line: 3, word: "犬" }] });
+    expect(results).toMatchObject([{ line: 2, word: "犬", error: expect.any(String) }, { line: 3, word: "犬", error: expect.any(String) }]);
+    expect(await repos.vocabulary.getEntries("ja")).toEqual(entries);
+    await expect(executeRepositoryOperation(repos, "vocabulary.resolveTranslations", { language: "ja", rows: [{ line: 0, word: "犬" }] })).rejects.toThrow();
+    await expect(executeRepositoryOperation(repos, "vocabulary.resolveTranslations", { language: "ja", rows: Array.from({ length: 26 }, (_, line) => ({ line: line + 1, word: `word${line}` })) })).rejects.toThrow("25");
   });
 });

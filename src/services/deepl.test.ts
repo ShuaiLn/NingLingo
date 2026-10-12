@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DeepLTranslationProvider } from "./deepl";
+import { DEEPL_MAX_REQUEST_BYTES, DeepLTranslationProvider, deepLTranslationBatches } from "./deepl";
 const input = { userId: "user-a", language: "el" as const, text: "κόσμος", context: "Ο κόσμος είναι όμορφος." };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
 describe("server DeepL provider", () => {
@@ -39,5 +39,47 @@ describe("server DeepL provider", () => {
     const fetcher = vi.fn<typeof fetch>();
     await expect(new DeepLTranslationProvider({ key: "private", baseUrl: "https://attacker.invalid" }, fetcher).usage()).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("translates an ordered word batch with English target and empty context", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ character_count: 0, character_limit: 1000000 })).mockResolvedValueOnce(json({ translations: [{ text: "dog" }, { text: "cat" }] }));
+    const provider = new DeepLTranslationProvider({ key: "test-server-key" }, fetcher);
+    expect(await provider.translateMany({ userId: "user-a", language: "ja", texts: ["犬", "猫"], context: "" })).toEqual([{ translation: "dog", source: "deepl" }, { translation: "cat", source: "deepl" }]);
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({ text: ["犬", "猫"], source_lang: "JA", target_lang: "EN", context: "", preserve_formatting: true });
+  });
+  it("splits by the UTF-8 size of the complete JSON request while preserving input order", async () => {
+    const words = Array.from({ length: 25 }, (_, index) => "犬".repeat(1990) + index);
+    const batches = deepLTranslationBatches("ja", words);
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.flat()).toEqual(words);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, options) => {
+      if (String(url).endsWith("usage")) return json({ character_count: 0, character_limit: 1000000 });
+      const body = String(options?.body);
+      expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(DEEPL_MAX_REQUEST_BYTES);
+      const texts = JSON.parse(body).text as string[];
+      expect(texts.length).toBeLessThanOrEqual(25);
+      return json({ translations: texts.map(text => ({ text: "translated " + text })) });
+    });
+    const translated = await new DeepLTranslationProvider({ key: "test" }, fetcher).translateMany({ userId: "user-a", language: "ja", texts: words, context: "" });
+    expect(translated.map(row => row.translation)).toEqual(words.map(word => "translated " + word));
+    expect(fetcher).toHaveBeenCalledTimes(1 + batches.length);
+    expect(deepLTranslationBatches("es", Array.from({ length: 26 }, (_, index) => String(index))).map(batch => batch.length)).toEqual([25, 1]);
+  });
+  it("validates the unique-batch cap and allowance before sending any text", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ character_count: 999999, character_limit: 1000000 }));
+    const provider = new DeepLTranslationProvider({ key: "test" }, fetcher);
+    await expect(provider.translateMany({ userId: "user", language: "ja", texts: Array.from({ length: 26 }, () => "犬"), context: "" })).rejects.toThrow("25");
+    expect(fetcher).not.toHaveBeenCalled();
+    await expect(provider.translateMany({ userId: "user", language: "ja", texts: ["犬", "猫"], context: "" })).rejects.toThrow("allowance");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("keeps successful UTF-8 subbatches when a later provider request fails", async () => {
+    const words = Array.from({ length: 25 }, (_, index) => "猫".repeat(1990) + index);
+    const batches = deepLTranslationBatches("ja", words);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ character_count: 0, character_limit: 1000000 })).mockResolvedValueOnce(json({ translations: batches[0].map(() => ({ text: "cat" })) })).mockResolvedValueOnce(json({ message: "private provider error" }, 429));
+    const translated = await new DeepLTranslationProvider({ key: "test" }, fetcher).translateMany({ userId: "user", language: "ja", texts: words, context: "" });
+    expect(translated).toHaveLength(25);
+    expect(translated.slice(0, batches[0].length).every(row => row.translation === "cat" && !row.error)).toBe(true);
+    expect(translated.slice(batches[0].length).every(row => row.translation === "" && row.error?.includes("busy"))).toBe(true);
+    expect(JSON.stringify(translated)).not.toContain("private provider error");
   });
 });

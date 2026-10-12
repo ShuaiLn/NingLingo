@@ -23,6 +23,14 @@ export async function executeRepositoryOperation(repos: AppRepositories, operati
     case "vocabulary.save": { const p = z.object({ input: vocabulary, id: id.optional() }).parse(input); return repos.vocabulary.saveEntry(p.input, p.id); }
     case "vocabulary.delete": return repos.vocabulary.deleteEntries(z.object({ ids: z.array(id).min(1).max(1000) }).parse(input).ids);
     case "vocabulary.import": return repos.vocabulary.importEntries(z.object({ inputs: z.array(vocabulary).min(1).max(2000) }).parse(input).inputs);
+    case "vocabulary.resolveTranslations": return repos.vocabulary.resolveTranslations(z.object({ language, rows: z.array(z.object({ line: z.number().int().positive(), word: z.string().trim().min(1).max(2000) })).min(1).max(2000) }).parse(input));
+    case "alphabetQuiz.sessions": return repos.alphabetQuiz.getSessions(z.object({ language }).parse(input).language);
+    case "alphabetQuiz.session": return repos.alphabetQuiz.getSession(z.object({ id }).parse(input).id);
+    case "alphabetQuiz.create": return repos.alphabetQuiz.create(z.object({ language, itemIds: z.array(z.string().min(1).max(200)).min(1).max(1000), randomSeed: z.number().int().min(0).max(4294967295).optional() }).parse(input));
+    case "alphabetQuiz.answer": { const p = z.object({ id, answer: nonempty, version, submissionId: z.string().min(1).max(200) }).parse(input); return repos.alphabetQuiz.answer(p.id, p); }
+    case "alphabetQuiz.save": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.saveAndExit(p.id, p.version); }
+    case "alphabetQuiz.resume": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.resume(p.id, p.version); }
+    case "alphabetQuiz.end": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.end(p.id, p.version); }
     case "quiz.sessions": return repos.quiz.getSessions(z.object({ language }).parse(input).language);
     case "quiz.session": return repos.quiz.getSession(z.object({ id }).parse(input).id);
     case "quiz.create": return repos.quiz.create(z.object({ language, wordIds: z.array(id).min(1).max(1000), type: quizType, randomSeed: z.number().int().min(0).max(4294967295).optional() }).parse(input));

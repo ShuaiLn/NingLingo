@@ -30,6 +30,14 @@ describe("reading lookup priority", () => {
     expect(await service.lookup(input({ entries: [], annotations: [] }))).toMatchObject({ translation: "cached café", source: "cache" });
     expect(translate).not.toHaveBeenCalled();
   });
+  it("keeps vocabulary and Reading cache namespaces separate even when text/context match", async () => {
+    const translate = vi.fn(async () => ({ translation: "contextual meaning", source: "mock" as const }));
+    const storeCache = vi.fn(async () => undefined);
+    const result = await new ReadingLookupService(provider(translate)).lookup(input({ entries: [], annotations: [], cache: [{ ...cache, lookupKind: "vocabulary" }], storeCache }));
+    expect(result).toMatchObject({ translation: "contextual meaning", source: "mock" });
+    expect(translate).toHaveBeenCalledOnce();
+    expect(storeCache).toHaveBeenCalledWith(expect.objectContaining({ lookupKind: "reading", context: "El café está aquí." }));
+  });
   it("calls the provider only for an unknown range, supplying the sentence", async () => {
     const translate = vi.fn(async () => ({ translation: "machine result", source: "mock" as const }));
     const storeCache = vi.fn(async () => undefined);

@@ -1,4 +1,4 @@
-import type { ActivityRecord, GrammarProgress, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import type { ActivityRecord, AlphabetQuizSession, GrammarProgress, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
 import { RELATION_TYPES } from "@/domain/models";
 
 export interface LocalDatabase {
@@ -8,6 +8,7 @@ export interface LocalDatabase {
   entries: VocabularyEntry[];
   wordProgress: WordProgress[];
   sessions: QuizSession[];
+  alphabetSessions: AlphabetQuizSession[];
   readings: Reading[];
   readingVersions: ReadingVersion[];
   annotations: ReadingAnnotation[];
@@ -46,6 +47,27 @@ function session(row: Record<string, unknown>): boolean {
     && integer(row.randomSeed) && integer(row.randomState) && row.schedulerVersion === 1 && integer(row.version, 1) && typeof row.settled === "boolean"
     && configuration !== null && integer(configuration.minChoices, 2) && integer(configuration.maxChoices, 2) && Array.isArray(configuration.retryRange) && configuration.retryRange.length === 2 && configuration.retryRange.every(value => integer(value));
 }
+function alphabetQuestion(row: Record<string, unknown>): boolean {
+  return strings(row, ["id", "itemId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && stringArray(row.acceptedAnswers) && (row.acceptedAnswers as string[]).length > 0;
+}
+function alphabetSession(row: Record<string, unknown>): boolean {
+  const configuration = object(row.configuration);
+  return ownedLanguage(row) && strings(row, ["id", "createdAt", "updatedAt", "learningDate"]) && integer(row.contentVersion, 1)
+    && oneOf(row.status, ["active", "saved", "completed", "ended"])
+    && rows(row.items, item => language(item) && strings(item, ["itemId", "group", "symbol", "name", "pronunciation", "example", "exampleTranslation", "audioText", "exampleReading"]) && stringArray(item.pronunciationAnswers) && (item.pronunciationAnswers as string[]).length > 0)
+    && rows(row.questionTemplates, alphabetQuestion) && rows(row.questions, alphabetQuestion)
+    && rows(row.attempts, attempt => strings(attempt, ["id", "questionId", "itemId", "answer", "answeredAt"]) && integer(attempt.position) && oneOf(attempt.kind, ["initial", "retry", "filler"]) && typeof attempt.correct === "boolean")
+    && rows(row.reservations, reservation => strings(reservation, ["itemId"]) && integer(reservation.position) && integer(reservation.interval))
+    && stringArray(row.testedItemIds) && stringArray(row.retryCompletedItemIds)
+    && (row.currentQuestion === null || (object(row.currentQuestion) !== null && alphabetQuestion(object(row.currentQuestion)!)))
+    && integer(row.randomSeed) && integer(row.randomState) && row.schedulerVersion === 1 && integer(row.version, 1)
+    && configuration !== null && Array.isArray(configuration.retryRange) && configuration.retryRange.length === 2 && configuration.retryRange.every(value => integer(value));
+}
+
+/** Existing v1 storage keeps its key and every record; only the new collection defaults. */
+function compatibleDatabase(value: LocalDatabase | null): LocalDatabase | null {
+  return value && value.alphabetSessions === undefined ? { ...value, alphabetSessions: [] } : value;
+}
 
 /** Reject malformed persisted records before business logic dereferences their fields. */
 export function isLocalDatabase(value: unknown): value is LocalDatabase {
@@ -58,12 +80,13 @@ export function isLocalDatabase(value: unknown): value is LocalDatabase {
     && rows(database.entries, vocabulary)
     && rows(database.wordProgress, row => ownedLanguage(row) && strings(row, ["wordId", "dueDate"]) && integer(row.stage) && Number(row.stage) <= 6 && nullableString(row.lastAdvancedDate) && nullableString(row.lastStudiedDate) && integer(row.firstAttempts) && integer(row.firstCorrect) && integer(row.errors) && stringArray(row.settledSessionIds))
     && rows(database.sessions, session)
+    && (database.alphabetSessions === undefined || rows(database.alphabetSessions, alphabetSession))
     && rows(database.readings, row => ownedLanguage(row) && strings(row, ["id", "title", "body", "createdAt", "updatedAt"]) && integer(row.version, 1) && oneOf(row.status, ["unread", "reading", "finished"]))
     && rows(database.readingVersions, row => strings(row, ["id", "readingId", "body", "createdAt"]) && integer(row.version, 1))
     && rows(database.annotations, row => strings(row, ["id", "userId", "readingId", "text", "translation", "reading", "createdAt"]) && integer(row.bodyVersion, 1) && integer(row.start) && integer(row.end, 1) && nullableString(row.vocabularyEntryId))
-    && rows(database.cache, row => ownedLanguage(row) && strings(row, ["id", "text", "context", "translation", "createdAt"]) && oneOf(row.source, ["mock", "deepl"]))
+    && rows(database.cache, row => ownedLanguage(row) && strings(row, ["id", "text", "context", "translation", "createdAt"]) && oneOf(row.source, ["mock", "deepl"]) && (row.lookupKind === undefined || oneOf(row.lookupKind, ["reading", "vocabulary"])))
     && rows(database.grammarProgress, row => ownedLanguage(row) && strings(row, ["pointId", "attemptedAt"]) && integer(row.contentVersion, 1) && integer(row.correct) && integer(row.total) && typeof row.completed === "boolean")
-    && rows(database.activity, row => ownedLanguage(row) && strings(row, ["id", "date"]) && oneOf(row.kind, ["quiz", "grammar", "reading"]) && integer(row.count));
+    && rows(database.activity, row => ownedLanguage(row) && strings(row, ["id", "date"]) && oneOf(row.kind, ["quiz", "grammar", "reading", "alphabet-quiz"]) && integer(row.count));
 }
 export class MemoryStorageAdapter implements StorageAdapter {
   private data: LocalDatabase | null = null;
@@ -83,7 +106,7 @@ export class BrowserStorageAdapter implements StorageAdapter {
       if (!raw) return null;
       const data: unknown = JSON.parse(raw);
       if (!isLocalDatabase(data)) throw new Error("Unsupported local data format");
-      return data;
+      return compatibleDatabase(data);
     } catch {
       this.blocked = true;
       this.message = "Memory only · browser storage is unavailable or has incompatible data; existing data was preserved";
@@ -105,17 +128,17 @@ export class LocalStore {
   private revision = 0;
   private readonly listeners = new Set<() => void>();
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(private adapter: StorageAdapter, seed: LocalDatabase) { const persisted = adapter.read(); this.data = persisted ?? structuredClone(seed); if (!persisted) adapter.write(this.data); }
+  constructor(private adapter: StorageAdapter, seed: LocalDatabase) { const persisted = compatibleDatabase(adapter.read()); this.data = persisted ?? structuredClone(seed); if (!persisted) adapter.write(this.data); }
   snapshot(): LocalDatabase { return structuredClone(this.data); }
   getRevision = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   status = () => this.adapter.status();
-  reload() { const data = this.adapter.read(); if (data) { this.data = data; this.notify(); } }
+  reload() { const data = compatibleDatabase(this.adapter.read()); if (data) { this.data = data; this.notify(); } }
   private notify() { this.revision++; this.listeners.forEach(listener => listener()); }
   async transaction<T>(mutate: (data: LocalDatabase) => T): Promise<T> {
     const run = async () => {
       const operation = () => {
-        const draft = this.adapter.read() ?? structuredClone(this.data);
+        const draft = compatibleDatabase(this.adapter.read()) ?? structuredClone(this.data);
         const result = mutate(draft);
         this.adapter.write(draft);
         this.data = draft;

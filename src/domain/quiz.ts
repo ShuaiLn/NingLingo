@@ -92,7 +92,7 @@ export function quizSetup(input: { entries: VocabularyEntry[]; type: QuizType })
 }
 
 /** Mulberry32: its single uint32 state is part of the persisted session. */
-function random(session: { randomState: number }): number {
+export function quizRandom(session: { randomState: number }): number {
   session.randomState = (session.randomState + 0x6D2B79F5) >>> 0;
   let value = session.randomState;
   value = Math.imul(value ^ (value >>> 15), value | 1);
@@ -100,10 +100,10 @@ function random(session: { randomState: number }): number {
   return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
 }
 
-function shuffle<T>(items: T[], state: { randomState: number }): T[] {
+export function quizShuffle<T>(items: T[], state: { randomState: number }): T[] {
   const result = [...items];
   for (let i = result.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(random(state) * (i + 1));
+    const j = Math.floor(quizRandom(state) * (i + 1));
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
@@ -128,11 +128,11 @@ export function createQuizSession(input: CreateQuizSessionInput): QuizSession {
   const setup = quizSetup(input);
   const now = input.now ?? new Date().toISOString();
   const state = { randomState: input.randomSeed >>> 0 };
-  const entries = shuffle(structuredClone(setup.entries), state);
+  const entries = quizShuffle(structuredClone(setup.entries), state);
   const templates = entries.map((entry): QuizQuestion => {
-    const choices = input.type === "typing" ? [] : shuffle([
+    const choices = input.type === "typing" ? [] : quizShuffle([
       choiceFor(entry, input.type),
-      ...shuffle(possibleDistractors(entry, entries, input.type), state).slice(0, 3),
+      ...quizShuffle(possibleDistractors(entry, entries, input.type), state).slice(0, 3),
     ], state);
     return {
       id: `template:${entry.id}`,
@@ -179,7 +179,7 @@ function scheduleNextQuestion(session: QuizSession): void {
       const retryCompleted = session.entries.filter((entry) => session.retryCompletedWordIds.includes(entry.id) && !pending.has(entry.id));
       const previouslyCorrect = session.entries.filter((entry) => session.testedWordIds.includes(entry.id) && !pending.has(entry.id));
       const pool = retryCompleted.length > 0 ? retryCompleted : previouslyCorrect;
-      wordId = pool.length > 0 ? pool[Math.floor(random(session) * pool.length)].id : undefined;
+      wordId = pool.length > 0 ? pool[Math.floor(quizRandom(session) * pool.length)].id : undefined;
     }
   }
   if (!wordId) throw new Error("Scheduler invariant failed: no eligible word can fill a reserved gap.");
@@ -216,7 +216,7 @@ export function answerQuiz(original: QuizSession, answer: string, submissionId?:
     }
     // The upper endpoint is always free: older reservations cannot extend past it.
     if (candidates.length === 0) throw new Error("No free retry position in the required interval.");
-    const position = candidates[Math.floor(random(session) * candidates.length)];
+    const position = candidates[Math.floor(quizRandom(session) * candidates.length)];
     session.reservations.push({ wordId: question.wordId, position, interval: position - question.position - 1 });
     session.retryCompletedWordIds = session.retryCompletedWordIds.filter((id) => id !== question.wordId);
   } else if (question.kind === "retry" && !session.retryCompletedWordIds.includes(question.wordId)) {

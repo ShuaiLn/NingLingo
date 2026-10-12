@@ -1,9 +1,11 @@
 import "server-only";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { AppRepositories } from "./contracts";
-import { VersionConflictError } from "./contracts";
-import type { ActivityRecord, GrammarProgress, LanguageCode, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
+import type { ActivityRecord, AlphabetQuizSession, GrammarProgress, LanguageCode, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
 import { createQuizSession, answerQuiz } from "@/domain/quiz";
+import { createAlphabetQuizSession, answerAlphabetQuiz } from "@/domain/alphabet-quiz";
+import { resolveVocabularyTranslations } from "@/services/vocabulary-translation";
 import { captureDueReview } from "@/domain/review";
 import { learningDate } from "@/domain/dates";
 import { ReadingLookupService } from "@/domain/reading";
@@ -51,6 +53,19 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
     const { data, error } = await client.from("quiz_sessions").select("state").eq("id", id).single();
     failure(error); if (!data) throw new Error("This quiz session is unavailable."); return data.state as QuizSession;
   }
+  async function alphabetSession(id: string): Promise<AlphabetQuizSession> {
+    const { data, error } = await client.from("alphabet_quiz_sessions").select("state").eq("id", id).single();
+    failure(error); if (!data) throw new Error("This alphabet quiz session is unavailable."); return data.state as AlphabetQuizSession;
+  }
+  async function commitAlphabet(previous: AlphabetQuizSession, next: AlphabetQuizSession, submissionId?: string) {
+    const result = await rpc<{ conflict: boolean; session: AlphabetQuizSession }>("nl_commit_alphabet_quiz", { p_user_id: user.id, p_session_id: previous.id, p_expected_version: previous.version, p_state: next, p_submission_id: submissionId ?? null }, true);
+    if (result.conflict) throw new AlphabetQuizVersionConflictError(result.session);
+    return result.session;
+  }
+  async function storeTranslation(entry: TranslationCacheEntry) {
+    const { error } = await privilegedSupabase().from("translation_cache").upsert({ id: entry.id, user_id: user.id, language: entry.language, lookup_kind: entry.lookupKind ?? "reading", target_language: "EN", text: entry.text, context: entry.context, translation: entry.translation, source: "deepl" }, { onConflict: "user_id,language,lookup_kind,cache_key", ignoreDuplicates: true });
+    failure(error);
+  }
   const entries = (language: LanguageCode) => rpc<VocabularyEntry[]>("nl_vocabulary_entries", { p_language: language });
   const words = (language: LanguageCode) => rpc<WordProgress[]>("nl_progress_words", { p_language: language });
   async function commit(previous: QuizSession, next: QuizSession, submissionId?: string) {
@@ -74,6 +89,19 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
       saveEntry: (input, id) => rpc("nl_save_vocabulary", { p_entry: input, p_entry_id: id ?? null }),
       deleteEntries: async ids => { const { error } = await client.from("vocabulary_entries").delete().in("id", ids); failure(error); },
       importEntries: inputs => rpc("nl_import_vocabulary", { p_entries: inputs }),
+      resolveTranslations: async input => resolveVocabularyTranslations({ ...input, userId: user.id, cache: await rows<TranslationCacheEntry>("translation_cache", input.language, { column: "lookup_kind", value: "vocabulary" }), provider: translationProvider, storeCache: storeTranslation }),
+    },
+    alphabetQuiz: {
+      getSessions: async language => { const result: AlphabetQuizSession[] = []; for (let offset = 0; ; offset += 1000) { const { data, error } = await client.from("alphabet_quiz_sessions").select("state").eq("language", language).order("updated_at", { ascending: false }).order("id").range(offset, offset + 999); failure(error); result.push(...(data ?? []).map(row => row.state as AlphabetQuizSession)); if ((data ?? []).length < 1000) return result; } },
+      getSession: alphabetSession,
+      create: async input => {
+        const state = createAlphabetQuizSession({ ...input, id: crypto.randomUUID(), userId: user.id, randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], learningDate: learningDate(new Date(), (await profile()).timezone) });
+        return rpc("nl_create_alphabet_quiz", { p_user_id: user.id, p_state: state }, true);
+      },
+      answer: async (id, input) => { const previous = await alphabetSession(id); if (previous.attempts.some(attempt => attempt.id === input.submissionId)) return previous; if (previous.version !== input.version) throw new AlphabetQuizVersionConflictError(previous); return commitAlphabet(previous, answerAlphabetQuiz(previous, input.answer, input.submissionId), input.submissionId); },
+      saveAndExit: async (id, version) => { const previous = await alphabetSession(id); if (previous.version !== version) throw new AlphabetQuizVersionConflictError(previous); if (previous.status !== "active") throw new Error("Only an active alphabet quiz can be saved."); return commitAlphabet(previous, { ...previous, status: "saved", version: version + 1, updatedAt: new Date().toISOString() }); },
+      resume: async (id, version) => { const previous = await alphabetSession(id); if (previous.version !== version) throw new AlphabetQuizVersionConflictError(previous); if (!["active", "saved"].includes(previous.status)) throw new Error("This alphabet quiz has already ended."); return commitAlphabet(previous, { ...previous, status: "active", version: version + 1, updatedAt: new Date().toISOString() }); },
+      end: async (id, version) => { const previous = await alphabetSession(id); if (previous.version !== version) throw new AlphabetQuizVersionConflictError(previous); if (!["active", "saved"].includes(previous.status)) return previous; return commitAlphabet(previous, { ...previous, status: "ended", currentQuestion: null, version: version + 1, updatedAt: new Date().toISOString() }); },
     },
     quiz: {
       getSessions: async language => { const result: QuizSession[] = []; for (let offset = 0; ; offset += 1000) { const { data, error } = await client.from("quiz_sessions").select("state").eq("language", language).order("updated_at", { ascending: false }).order("id").range(offset, offset + 999); failure(error); result.push(...(data ?? []).map(row => row.state as QuizSession)); if ((data ?? []).length < 1000) return result; } },
@@ -106,14 +134,14 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
       getVersions: id => rows<ReadingVersion>("reading_versions", undefined, { column: "reading_id", value: id }),
       getAnnotations: async id => { const result = await rows<ReadingAnnotation & { startOffset: number; endOffset: number }>("reading_annotations", undefined, { column: "reading_id", value: id }); return result.map(row => ({ ...row, start: row.startOffset, end: row.endOffset })); },
       annotate: input => rpc("nl_annotate_reading", { p_input: input }),
-      getCache: () => rows<TranslationCacheEntry>("translation_cache"),
+      getCache: () => rows<TranslationCacheEntry>("translation_cache", undefined, { column: "lookup_kind", value: "reading" }),
       lookup: async request => {
         const { data, error } = await client.from("readings").select("*").eq("id", request.readingId).single(); failure(error); if (!data) throw new Error("This reading is unavailable.");
         const reading = camelRow<Reading>(data as Row);
         const [vocabulary, annotations, cache] = await Promise.all([entries(reading.language), repos.reading.getAnnotations(reading.id), repos.reading.getCache()]);
         return lookupService.lookup({ userId: user.id, reading, request, entries: vocabulary, annotations, cache, storeCache: async entry => {
           const latest = await client.from("readings").select("version").eq("id", reading.id).single(); failure(latest.error); if (latest.data?.version !== request.bodyVersion) throw new Error("The reading changed during lookup. Select the text again.");
-          const { error: cacheError } = await privilegedSupabase().from("translation_cache").upsert({ id: entry.id, user_id: user.id, language: entry.language, text: entry.text, context: entry.context, translation: entry.translation, source: "deepl" }, { onConflict: "user_id,language,cache_key", ignoreDuplicates: true }); failure(cacheError);
+          await storeTranslation({ ...entry, lookupKind: "reading" });
         } });
       },
     },

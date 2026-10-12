@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalRepositories } from "@/repositories/local";
+import { alphabetEntries } from "@/data/alphabet";
 const mocks = vi.hoisted(() => ({ getUser: vi.fn(), createRepositories: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/server", () => ({ serverSupabase: async () => ({ auth: { getUser: mocks.getUser } }) }));
@@ -64,5 +65,16 @@ describe("server repository authentication boundary", () => {
     const response = await repositoryRequest(request({ operation: "quiz.create", args: { userId: "other", state: {}, language: "ja" } }));
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("invalid");
+  });
+  it("returns the latest immutable Alphabet snapshot on a version conflict", async () => {
+    const repos = createLocalRepositories();
+    const item = alphabetEntries.find(item => item.language === "es")!;
+    const session = await repos.alphabetQuiz.create({ language: "es", itemIds: [item.id] });
+    const saved = await repos.alphabetQuiz.saveAndExit(session.id, session.version);
+    mocks.getUser.mockResolvedValue({ data: { user: { id: "verified" } }, error: null });
+    mocks.createRepositories.mockReturnValue(repos);
+    const response = await repositoryRequest(request({ operation: "alphabetQuiz.resume", args: { id: session.id, version: session.version } }));
+    expect(response.status).toBe(409);
+    expect((await response.json()).latest).toEqual(saved);
   });
 });

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 import { serverSupabase } from "@/lib/supabase/server";
 import { createSupabaseRepositories } from "@/repositories/supabase";
-import { VersionConflictError } from "@/repositories/contracts";
+import { AlphabetQuizVersionConflictError, VersionConflictError } from "@/repositories/contracts";
 import { executeRepositoryOperation } from "./repository-operations";
 function acceptsOrigin(request: Request): boolean {
   if (request.headers.get("sec-fetch-site") === "cross-site") return false;
@@ -34,7 +34,7 @@ export async function repositoryRequest(request: Request, fixedOperation?: strin
     const repos = createSupabaseRepositories(supabase, user);
     return respond({ data: await executeRepositoryOperation(repos, operation, args) });
   } catch (error: unknown) {
-    if (error instanceof VersionConflictError) return respond({ error: error.message, latest: error.latest }, 409);
+    if (error instanceof VersionConflictError || error instanceof AlphabetQuizVersionConflictError) return respond({ error: error.message, latest: error.latest }, 409);
     if (error instanceof ZodError || error instanceof SyntaxError) return respond({ error: "The request contains invalid or missing fields." }, 400);
     return respond({ error: error instanceof Error ? error.message : "The operation could not be completed." }, 400);
   }

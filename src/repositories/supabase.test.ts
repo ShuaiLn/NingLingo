@@ -2,8 +2,9 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { QuizSession, VocabularyEntry } from "@/domain/models";
 import { createQuizSession } from "@/domain/quiz";
+import { createAlphabetQuizSession } from "@/domain/alphabet-quiz";
 import { initialWordProgress } from "@/domain/review";
-import { VersionConflictError } from "./contracts";
+import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
 
 const mocks = vi.hoisted(() => ({ privileged: { rpc: vi.fn(), from: vi.fn() }, translate: vi.fn() }));
 vi.mock("server-only", () => ({}));
@@ -60,6 +61,49 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("Supabase production repository boundary", () => {
+  it("creates Alphabet snapshots exclusively from current static content via a service-only RPC", async () => {
+    const h = harness();
+    mocks.privileged.rpc.mockImplementationOnce(async (_name: string, args: Record<string, unknown>) => ({ data: args.p_state, error: null }));
+    const created = await h.repos.alphabetQuiz.create({ language: "es", itemIds: ["es-letter-1"] });
+    expect(created.items[0]).toMatchObject({ itemId: "es-letter-1", symbol: "B b", pronunciationAnswers: ["b"] });
+    expect(created.contentVersion).toBe(1);
+    expect(mocks.privileged.rpc).toHaveBeenCalledWith("nl_create_alphabet_quiz", { p_user_id: uid, p_state: created });
+    expect(h.rpc).not.toHaveBeenCalledWith("nl_create_alphabet_quiz", expect.anything());
+  });
+  it("grades Alphabet from the saved snapshot, preserves replay, and refuses stale resume", async () => {
+    const snapshot = createAlphabetQuizSession({ id: sessionId, userId: uid, language: "es", itemIds: ["es-letter-1"], randomSeed: 5, learningDate: "2026-10-11" });
+    snapshot.items[0].pronunciationAnswers = ["frozen", "original"];
+    snapshot.questionTemplates[0].acceptedAnswers = ["frozen", "original"];
+    snapshot.currentQuestion!.acceptedAnswers = ["frozen", "original"];
+    const h = harness({ tables: { alphabet_quiz_sessions: { data: { state: snapshot }, error: null } } });
+    const next = await h.repos.alphabetQuiz.answer(sessionId, { answer: "ORIGINAL", version: 1, submissionId: "a" });
+    expect(next.attempts[0].correct).toBe(true);
+    expect(next.items).toEqual(snapshot.items);
+    expect(mocks.privileged.rpc).toHaveBeenCalledWith("nl_commit_alphabet_quiz", expect.objectContaining({ p_expected_version: 1, p_submission_id: "a", p_user_id: uid }));
+    await expect(h.repos.alphabetQuiz.resume(sessionId, 99)).rejects.toBeInstanceOf(AlphabetQuizVersionConflictError);
+    const replay = harness({ tables: { alphabet_quiz_sessions: { data: { state: next }, error: null } } });
+    mocks.privileged.rpc.mockClear();
+    expect(await replay.repos.alphabetQuiz.answer(sessionId, { answer: "ignored", version: 1, submissionId: "a" })).toEqual(next);
+    expect(mocks.privileged.rpc).not.toHaveBeenCalled();
+  });
+  it("loads complete Alphabet history past the 1,000-row pagination boundary", async () => {
+    const snapshot = createAlphabetQuizSession({ id: sessionId, userId: uid, language: "es", itemIds: ["es-letter-1"], randomSeed: 5, learningDate: "2026-10-11" });
+    const data = Array.from({ length: 1002 }, (_, index) => ({ state: { ...snapshot, id: `alphabet-${index}` } }));
+    const h = harness({ tables: { alphabet_quiz_sessions: { data, error: null } } });
+    expect(await h.repos.alphabetQuiz.getSessions("es")).toHaveLength(1002);
+    expect(h.from).toHaveBeenCalledTimes(2);
+  });
+  it("deduplicates missing vocabulary words and only translates cache misses in the vocabulary namespace", async () => {
+    const cache = [{ id: "cache", user_id: uid, language: "ja", lookup_kind: "vocabulary", text: "犬", context: "", translation: "dog", source: "deepl" }];
+    const h = harness({ tables: { translation_cache: { data: cache, error: null } } });
+    mocks.translate.mockResolvedValueOnce({ translation: "cat", source: "deepl" });
+    const rows = ["犬", "犬", "犬", "猫"].map((word, index) => ({ line: index + 2, word }));
+    const resolved = await h.repos.vocabulary.resolveTranslations({ language: "ja", rows });
+    expect(resolved.map(row => row.translation)).toEqual(["dog", "dog", "dog", "cat"]);
+    expect(mocks.translate).toHaveBeenCalledExactlyOnceWith({ userId: uid, language: "ja", text: "猫", context: "" });
+    expect(h.tables.get("translation_cache")?.eq).toHaveBeenCalledWith("lookup_kind", "vocabulary");
+    expect(mocks.privileged.from).toHaveBeenCalledWith("translation_cache");
+  });
   it("uses verified Auth identity rather than a stale profile email", async () => {
     expect(await harness().repos.auth.getSession()).toEqual({ ...profile, email: user.email });
   });

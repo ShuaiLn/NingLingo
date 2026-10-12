@@ -1,5 +1,33 @@
 # NingLingo production verification report
 
+## Alphabet Quiz and Vocabulary CSV — October 12, 2026
+
+The new features passed live verification against the connected production Supabase project and the current production build. Migration [013_alphabet_quiz.sql](../database/migrations/013_alphabet_quiz.sql) was applied by the owner before this pass. No DDL was executed here, and no applied migration was rewritten. Migrations 001–013 now form the verified schema, with 26 RLS-enabled domain tables.
+
+The final new-feature cloud run passed **232 recorded checks**, plus browser assertions, using two disposable accounts. It verified three-language Alphabet creation/grading/retries, immutable versioned snapshots, Save/Resume/end, submission replay, version conflicts, hints, separate Progress/history, bidirectional session/attempt isolation and service-only grant denial. Cloud-backed CSV browser checks verified word-only and legacy previews, lookup deduplication, account/language/Reading cache separation, manual edits including clearing while a response is pending, file replacement/closure, duplicate reclassification, retry and partial atomic imports. Rejected confirmation retains the complete preview; a real database import failure rolls back the entire batch. Both accounts and their cascading data were deleted; an independent Auth inventory found zero remaining verification accounts.
+
+Provider misses and failures are tested with injected providers; cloud lookups use disposable cache fixtures, so this pass made no real DeepL requests. The accepted pronunciation strings remain explicit learner answers. Vocabulary SRS and the existing Quiz scheduler are unchanged in behavior. Reading, Grammar and Auth regressions passed the full test suites.
+
+| Current verification | Result |
+| --- | --- |
+| Lint / standalone typecheck | Passed, zero lint warnings; typecheck repeated after production build |
+| All unit/repository tests | 654 passed in 32 files |
+| Included PostgreSQL/database tests | 55 passed: 29 existing + 26 Alphabet/namespace tests, all 13 migrations |
+| Complete Playwright run | 40/40 passed in one run, including all three languages and existing features |
+| New-feature live cloud | 232 checks passed; two accounts cleaned up |
+| Migration sequence | 13 ordered files validated without cloud writes |
+| Production build | Passed, Next.js 16.4.0 / webpack |
+| Client and repository/server secret scans | Passed: 178 repository files and 92 server artifacts |
+| Staged secret scan / staged diff check | Passed: 50 changed files, no credentials/private environment files |
+| Diff whitespace check | Passed |
+
+Production Grammar inventory was identical before and after verification: **240 original v1 drafts and 240 pre-existing published v2 records**. None was regenerated, imported, reviewed, published or assigned a different status in this work. The historical report below predates the existing v2 publication and must not be read as the current inventory.
+
+There is no remaining external blocker for these features. No Vercel deployment was performed. See [ALPHABET_CSV_VERIFICATION.md](ALPHABET_CSV_VERIFICATION.md) for the coverage boundaries, reproduction commands and complete changed-file manifest, and [ALPHABET_AND_CSV.md](ALPHABET_AND_CSV.md) for behavior.
+
+<details>
+<summary>Historical integration verification — October 11, 2026</summary>
+
 Verified October 11, 2026 (America/Tijuana). **The final cloud run passed 858 assertions with no unresolved application/database failures.** Migrations 001–012 are applied; both Reading conflict checks pass. Public email/password signup remains intentionally enabled, and email confirmation remains required. All 240 grammar lessons remain drafts. **Vercel was not touched.**
 
 The remaining external public-signup prerequisite is **custom SMTP**. The actual signup request received Supabase's built-in sender `429 over_email_send_rate_limit`. Provisioning, confirmation, cookie sessions, and isolation passed separately with disposable confirmation fixtures. Successful public registration and inbox delivery are not claimed.
@@ -114,3 +142,5 @@ Implementation commit: **`1aa2e2f0a3ca8ed5ae19b57806fa56d4a07f57a7`**, committed
 **Vercel: untouched and not deployed, as requested.** No production URL is claimed. Future deployment uses the existing names `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `DEEPL_API_KEY`, `DEEPL_API_BASE_URL`; only the first two are browser-public. Do not enable local repositories in production. `SUPABASE_ACCESS_TOKEN` is an optional operator migration credential, not a runtime requirement.
 
 The remaining external public-signup prerequisite is custom SMTP and a delivered-email confirmation check. Human review remains necessary for eventual publication of the 240 drafts. Vercel/domain configuration is deliberately postponed. Migration 012 and enabled signup are **not** unresolved issues; no application/database integration failure remains.
+
+</details>

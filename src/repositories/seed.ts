@@ -15,5 +15,5 @@ export function createDevelopmentSeed(now = new Date()): LocalDatabase {
     el: { title: "Μια ήρεμη μέρα", body: "Το πρωί πίνω νερό και διαβάζω ένα βιβλίο. Ο φίλος μου έχει μια γάτα. Σήμερα πηγαίνουμε στο σχολείο. Μετά τρώμε ψωμί και μιλάμε για την οικογένεια." },
   };
   const readings: Reading[] = (Object.keys(articles) as LanguageCode[]).map(language => ({ id: `seed-reading-${language}`, userId: profile.id, language, ...articles[language], status: "unread", version: 1, createdAt, updatedAt: createdAt }));
-  return { schemaVersion: 1, profile, lists: seedVocabularyLists(profile.id), entries, wordProgress: entries.map(entry => ({ ...initialWordProgress(entry, today), dueDate: today })), sessions: [], readings, readingVersions: readings.map(reading => ({ id: `${reading.id}:1`, readingId: reading.id, version: 1, body: reading.body, createdAt })), annotations: [], cache: [], grammarProgress: [], activity: [] };
+  return { schemaVersion: 1, profile, lists: seedVocabularyLists(profile.id), entries, wordProgress: entries.map(entry => ({ ...initialWordProgress(entry, today), dueDate: today })), sessions: [], alphabetSessions: [], readings, readingVersions: readings.map(reading => ({ id: `${reading.id}:1`, readingId: reading.id, version: 1, body: reading.body, createdAt })), annotations: [], cache: [], grammarProgress: [], activity: [] };
 }

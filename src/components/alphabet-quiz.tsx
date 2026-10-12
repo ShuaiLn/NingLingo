@@ -1,0 +1,178 @@
+"use client";
+
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { ArrowRight, CircleCheck, Play, Save, Square } from "lucide-react";
+import type { AlphabetQuizQuestion, AlphabetQuizSession, LanguageCode } from "@/domain/models";
+import { AlphabetQuizVersionConflictError } from "@/repositories/contracts";
+import { useAppData } from "./app-provider";
+import { AudioButton, stopAudio } from "./audio-button";
+import "./quiz.css";
+import "./alphabet-quiz.css";
+
+interface Feedback { question: AlphabetQuizQuestion; correct: boolean }
+
+export function AlphabetQuiz({ language, itemIds, selectionLabel, groupPicker, children }: {
+  language: LanguageCode;
+  itemIds: string[];
+  selectionLabel: string;
+  groupPicker: ReactNode;
+  children: ReactNode;
+}) {
+  const requestedSession = useSearchParams().get("session");
+  const { repos, alphabetSessions, ready, error: loadError } = useAppData(language);
+  const [session, setSession] = useState<AlphabetQuizSession | null>(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [answer, setAnswer] = useState("");
+  const [showName, setShowName] = useState(false);
+  const [showAssociation, setShowAssociation] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const currentSessionId = useRef<string | null>(null);
+  const pendingSubmission = useRef<{ questionId: string; answer: string; id: string } | null>(null);
+  const resumeRequests = useRef(new Map<string, Promise<AlphabetQuizSession>>());
+  const inputId = useId();
+  const nameId = useId();
+  const associationId = useId();
+  const question = feedback?.question ?? session?.currentQuestion;
+  // Once a session exists, every displayed character, hint and answer comes from its snapshot.
+  const item = session?.items.find(candidate => candidate.itemId === question?.itemId);
+  const resumable = alphabetSessions.filter(candidate => candidate.status === "saved" || candidate.status === "active");
+
+  useEffect(() => () => stopAudio(), [question?.id, language]);
+
+  function resetQuestion() {
+    stopAudio(); setFeedback(null); setAnswer(""); setShowName(false); setShowAssociation(false);
+  }
+
+  function showSession(next: AlphabetQuizSession) {
+    currentSessionId.current = next.id;
+    setSession(next); resetQuestion(); setError("");
+  }
+
+  function sessionUrl(id: string | null) {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("session", id); else url.searchParams.delete("session");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function handleFailure(failure: unknown) {
+    if (failure instanceof AlphabetQuizVersionConflictError) {
+      pendingSubmission.current = null;
+      currentSessionId.current = failure.latest.id;
+      setSession(failure.latest); resetQuestion();
+    }
+    setError(failure instanceof Error ? failure.message : "Could not update this alphabet quiz. Please try again.");
+  }
+
+  useEffect(() => {
+    if (!requestedSession || !ready || currentSessionId.current === requestedSession) return;
+    let active = true;
+    let request = resumeRequests.current.get(requestedSession);
+    if (!request) {
+      request = repos.alphabetQuiz.getSession(requestedSession).then(snapshot => {
+        if (snapshot.language !== language) throw new Error("This saved alphabet quiz belongs to a different language. Open it from that language’s Alphabet page.");
+        return snapshot.status === "completed" || snapshot.status === "ended" ? snapshot : repos.alphabetQuiz.resume(snapshot.id, snapshot.version);
+      });
+      resumeRequests.current.set(requestedSession, request);
+      const requests = resumeRequests.current;
+      void request.then(() => requests.delete(requestedSession), () => requests.delete(requestedSession));
+    }
+    void Promise.resolve().then(() => { if (active) setBusy(true); return request; }).then(next => {
+      if (!active || !next) return;
+      currentSessionId.current = next.id;
+      stopAudio(); setSession(next); setFeedback(null); setAnswer(""); setShowName(false); setShowAssociation(false); setError("");
+    }).catch((failure: unknown) => {
+      if (!active) return;
+      if (failure instanceof AlphabetQuizVersionConflictError) {
+        currentSessionId.current = failure.latest.id;
+        stopAudio(); setSession(failure.latest); setFeedback(null); setAnswer(""); setShowName(false); setShowAssociation(false);
+      }
+      setError(failure instanceof Error ? failure.message : "Could not resume this alphabet quiz.");
+    }).finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  }, [requestedSession, ready, repos, language]);
+
+  async function start() {
+    if (busy || !itemIds.length) return;
+    setBusy(true); setError("");
+    try {
+      const next = await repos.alphabetQuiz.create({ language, itemIds });
+      showSession(next); sessionUrl(next.id);
+    } catch (failure: unknown) { handleFailure(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function resume(saved: AlphabetQuizSession) {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const next = await repos.alphabetQuiz.resume(saved.id, saved.version);
+      showSession(next); sessionUrl(next.id);
+    } catch (failure: unknown) { handleFailure(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function submit() {
+    if (!session?.currentQuestion || session.status !== "active" || feedback || busy || !answer.trim()) return;
+    const current = session.currentQuestion;
+    if (pendingSubmission.current?.questionId !== current.id || pendingSubmission.current.answer !== answer) {
+      pendingSubmission.current = { questionId: current.id, answer, id: crypto.randomUUID() };
+    }
+    setBusy(true); setError(""); stopAudio();
+    try {
+      const next = await repos.alphabetQuiz.answer(session.id, { answer, version: session.version, submissionId: pendingSubmission.current.id });
+      const attempt = next.attempts.find(candidate => candidate.questionId === current.id);
+      setSession(next);
+      if (attempt) setFeedback({ question: current, correct: attempt.correct });
+      pendingSubmission.current = null;
+    } catch (failure: unknown) { handleFailure(failure); }
+    finally { setBusy(false); }
+  }
+
+  async function leave(end: boolean) {
+    if (!session || busy) return;
+    if (!end && (session.status === "completed" || session.status === "ended")) { newQuiz(); return; }
+    setBusy(true); setError(""); stopAudio();
+    try {
+      const next = end ? await repos.alphabetQuiz.end(session.id, session.version) : await repos.alphabetQuiz.saveAndExit(session.id, session.version);
+      resetQuestion(); pendingSubmission.current = null;
+      if (end) setSession(next);
+      else { currentSessionId.current = null; setSession(null); sessionUrl(null); }
+    } catch (failure: unknown) { handleFailure(failure); }
+    finally { setBusy(false); }
+  }
+
+  function newQuiz() {
+    resetQuestion(); setSession(null); setError(""); pendingSubmission.current = null; currentSessionId.current = null; sessionUrl(null);
+  }
+
+  const first = session?.attempts.filter(attempt => attempt.kind === "initial") ?? [];
+  const accuracy = first.length ? Math.round(first.filter(attempt => attempt.correct).length / first.length * 100) : null;
+  const finished = session && (session.status === "completed" || session.status === "ended") && !feedback;
+
+  return <>
+    {(error || loadError) && <div className="notice" role="alert">{error || loadError}</div>}
+    {!session ? <>
+      <div className="toolbar">{groupPicker}<button className="button" disabled={!ready || busy || !itemIds.length} onClick={() => void start()}><Play size={16} />{busy ? "Opening alphabet quiz…" : "Start alphabet quiz"}</button><span className="muted">{itemIds.length} symbols selected</span></div>
+      {!ready && !loadError && <p role="status">Loading your alphabet practice…</p>}
+      <p className="mini-note alphabet-quiz-intro">Practise {selectionLabel}. Type each character’s pronunciation. Letter names and associations are optional hints; they do not affect your score.</p>
+      {resumable.length > 0 && <section className="card alphabet-resume-panel"><div className="section-heading"><h2>Saved alphabet quizzes</h2><Save size={18} /></div>{resumable.map(saved => <div className="quiz-resume-row" key={saved.id}><div><strong>{[...new Set(saved.items.map(snapshot => snapshot.group))].join(" · ")}</strong><p className="muted">{saved.testedItemIds.length} / {saved.items.length} symbols seen · {saved.attempts.length} answers saved · {saved.reservations.length} retries waiting</p></div><button className="button secondary" disabled={busy} onClick={() => void resume(saved)}>Resume alphabet quiz <ArrowRight size={15} /></button></div>)}</section>}
+      {children}
+    </> : finished ? <section className="card quiz-finished alphabet-quiz-finished"><span className="quiz-finished-icon"><CircleCheck size={36} /></span><p className="eyebrow">{session.status === "completed" ? "Alphabet practice complete" : "Alphabet practice ended"}</p><h2>{session.status === "completed" ? "The sounds are becoming familiar." : "Your alphabet progress is saved."}</h2><p className="muted">{session.testedItemIds.length} symbols practised · {session.attempts.length} questions completed</p><div className="quiz-result"><strong>{accuracy === null ? "—" : `${accuracy}%`}</strong><span>alphabet first-attempt accuracy</span></div><div className="toolbar" style={{ justifyContent: "center", marginTop: 24 }}><button className="button" onClick={newQuiz}>New alphabet quiz <ArrowRight size={16} /></button><Link className="button secondary" href={`/${language}/progress`}>View progress</Link></div></section>
+      : session.status === "saved" ? <section className="card alphabet-resume-panel"><h2>This alphabet quiz is saved</h2><p className="muted">Resume its saved questions and retries to continue.</p><button className="button" disabled={busy} onClick={() => void resume(session)}>Resume alphabet quiz <ArrowRight size={15} /></button></section>
+        : question && item ? <>
+          <div className="quiz-session-bar"><span className="badge">Alphabet quiz</span><span className="muted">{session.testedItemIds.length} / {session.items.length} symbols seen · Question {question.position + 1}</span><div className="toolbar"><button className="button secondary" disabled={busy || session.status !== "active"} onClick={() => void leave(false)}><Save size={14} />Save & exit</button><button className="text-button" disabled={busy || session.status !== "active"} onClick={() => void leave(true)}><Square size={13} />End alphabet quiz</button></div></div>
+          <section className="card quiz-question-card alphabet-quiz-card">
+            <p className="eyebrow">{question.kind === "retry" ? "Try this one again" : question.kind === "filler" ? "Keep your recall warm" : "Type the pronunciation"}</p>
+            <h2 className="quiz-prompt alphabet-quiz-symbol" lang={session.language}>{item.symbol}</h2>
+            <form className="quiz-typing" onSubmit={event => { event.preventDefault(); void submit(); }}><label className="sr-only" htmlFor={inputId}>Pronunciation</label><input key={question.id} autoFocus id={inputId} className="field" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Your pronunciation…" autoComplete="off" autoCapitalize="off" spellCheck={false} disabled={Boolean(feedback) || busy} /><button className="button" disabled={Boolean(feedback) || busy || !answer.trim()} type="submit">Check answer <ArrowRight size={16} /></button></form>
+            <div className="alphabet-hint-toggles"><button type="button" className="button secondary" aria-expanded={showName} aria-controls={nameId} onClick={() => setShowName(value => !value)}>{showName ? "Hide" : "Show"} Letter Name</button><button type="button" className="button secondary" aria-expanded={showAssociation} aria-controls={associationId} onClick={() => { stopAudio(); setShowAssociation(value => !value); }}>{showAssociation ? "Hide" : "Show"} Association</button></div>
+            {showName && <div id={nameId} className="alphabet-name-hint" lang={session.language}>{item.name}</div>}
+            {showAssociation && <div id={associationId} className="alphabet-association-hint"><div className="word-with-audio"><p className="muted">{item.pronunciation}</p><AudioButton text={item.audioText || item.symbol} language={session.language} label={`Play letter name ${item.name}`} /></div><div className="word-with-audio"><span lang={session.language}>{item.example}</span><AudioButton text={item.example} reading={item.exampleReading} language={session.language} /></div><p className="muted">{item.exampleTranslation}</p></div>}
+            {feedback && <div className={`quiz-feedback ${feedback.correct ? "correct" : "incorrect"}`} role="status"><div><strong>{feedback.correct ? "Correct!" : `The standard pronunciation is ${item.pronunciationAnswers[0]}.`}</strong>{!feedback.correct && <p>This character is scheduled for another try.</p>}</div><button className="button" onClick={resetQuestion}>{session.status === "completed" ? "See results" : "Continue"}<ArrowRight size={15} /></button></div>}
+          </section>
+        </> : <p role="status">Opening your saved question…</p>}
+  </>;
+}

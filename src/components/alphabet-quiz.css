@@ -1,0 +1,21 @@
+.alphabet-quiz-intro { margin: 0 0 20px; }
+.alphabet-resume-panel { margin-bottom: 24px; }
+.alphabet-quiz-card .alphabet-quiz-symbol { font-size: clamp(52px, 9vw, 82px); }
+.alphabet-hint-toggles { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 24px; }
+.alphabet-hint-toggles .button { padding: 9px 13px; font-size: 12px; }
+.alphabet-name-hint { margin: 18px auto 0; font-size: 18px; }
+.alphabet-association-hint { margin: 18px auto 0; padding: 18px; max-width: 460px; border-radius: 12px; background: var(--accent-pale, #fff0f5); }
+.alphabet-association-hint .word-with-audio { justify-content: center; margin: 9px 0; }
+.alphabet-association-hint p { margin: 0; font-size: 13px; }
+.alphabet-association-hint > p { margin-top: 10px; }
+.alphabet-progress-panel { margin: 24px 0; }
+.alphabet-progress-panel .alphabet-accuracy { font-size: 32px; color: var(--accent-dark); }
+.alphabet-history-summary { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.alphabet-history-summary p { font-size: 12px; margin: 0; }
+.alphabet-history-list .alphabet-history-link { display: inline-block; font-size: 12px; margin-top: 5px; }
+@media (max-width: 760px) {
+  .alphabet-quiz-card.quiz-question-card { padding: 26px 18px !important; }
+  .alphabet-page .quiz-resume-row { flex-wrap: wrap; }
+  .alphabet-page .quiz-feedback { flex-wrap: wrap; }
+  .alphabet-page .quiz-session-bar .toolbar { gap: 12px; }
+}

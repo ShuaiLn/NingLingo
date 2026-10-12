@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { RELATION_TYPES, type LanguageCode, type RelatedWord, type RelationType, type VocabularyEntry, type VocabularyExample, type VocabularyInput } from "@/domain/models";
 import { kanaDisplay } from "@/domain/languages";
-import { exportCsv, previewCsv } from "@/domain/csv";
+import { classifyCsvRows, exportCsv, previewCsv, vocabularyCsvTemplate } from "@/domain/csv";
 import type { CsvPreview } from "@/domain/csv";
+import { applyCsvTranslations, editCsvTranslation, normalizedCsvWord, unresolvedCsvQueries } from "@/domain/csv-preview";
 import { normalizeVocabularyDetails, vocabularyExamples } from "@/domain/vocabulary";
 import { useAppData } from "./app-provider";
 import { AudioButton } from "./audio-button";
@@ -20,6 +21,10 @@ function downloadCsv(entries: VocabularyEntry[], language: LanguageCode) {
   const url = URL.createObjectURL(new Blob([exportCsv(entries)], { type: "text/csv;charset=utf-8" }));
   const anchor = document.createElement("a"); anchor.href = url; anchor.download = `ninglingo-${language}-vocabulary.csv`; anchor.click(); URL.revokeObjectURL(url);
 }
+function downloadCsvTemplate() {
+  const url = URL.createObjectURL(new Blob([vocabularyCsvTemplate()], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = "ninglingo-vocabulary-template.csv"; anchor.click(); URL.revokeObjectURL(url);
+}
 
 export function VocabularyPage({ language }: { language: LanguageCode }) {
   const { repos, entries, lists, ready, error } = useAppData(language);
@@ -28,7 +33,10 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
   const [form, setForm] = useState<WordForm | null>(null), [editingId, setEditingId] = useState<string | undefined>();
   const [firstListName, setFirstListName] = useState("My vocabulary");
   const [listName, setListName] = useState(""), [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
-  const [preview, setPreview] = useState<CsvPreview | null>(null), [importList, setImportList] = useState("");
+  const [previewState, setPreview] = useState<CsvPreview | null>(null), [importList, setImportList] = useState("");
+  const previewGeneration = useRef(0);
+  const preview = previewState?.language === language ? classifyCsvRows(previewState.rows, entries, language, previewState.headerErrors, previewState.generation) : null;
+  useEffect(() => () => { previewGeneration.current++; }, [language]);
   const fileInput = useRef<HTMLInputElement>(null);
   const categories = [...new Set(entries.map((entry) => entry.category).filter(Boolean))].sort();
   const searchValue = (value: string) => (language === "ja" ? kanaDisplay(value.normalize("NFC"), "hiragana") : value.normalize("NFC")).toLocaleLowerCase();
@@ -65,12 +73,39 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
     });
   }
   async function readCsv(file: File) {
+    const generation = ++previewGeneration.current;
+    setPreview(null);
     await run(async () => {
       const source = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
       const targetList = importList || defaultList;
       if (!targetList) throw new Error("Create a vocabulary list before importing.");
-      setImportList(targetList); setPreview(previewCsv(source, entries, language, targetList));
+      if (generation !== previewGeneration.current) return;
+      const next = { ...previewCsv(source, entries, language, targetList), generation };
+      setImportList(targetList); setPreview(next);
+      void resolveMissingTranslations(next);
     });
+  }
+  async function resolveMissingTranslations(current: CsvPreview) {
+    const generation = current.generation;
+    const queries = unresolvedCsvQueries(current);
+    if (!queries.length || current.headerErrors.length) return;
+    const words = new Set(queries.map(row => row.word));
+    const editRevisions = new Map(current.unresolved.map(row => [row.line, row.editRevision]));
+    setPreview(latest => latest?.generation === generation ? classifyCsvRows(latest.rows.map(row => !row.errors.length && !row.input.translation.trim() && words.has(normalizedCsvWord(row.input.word)) ? { ...row, resolving: true, translationError: "" } : row), entries, language, latest.headerErrors, generation) : latest);
+    for (let start = 0; start < queries.length; start += 25) {
+      if (generation !== previewGeneration.current) return;
+      const batch = queries.slice(start, start + 25);
+      try {
+        const results = await repos.vocabulary.resolveTranslations({ language, rows: batch });
+        if (generation !== previewGeneration.current) return;
+        setPreview(latest => latest ? applyCsvTranslations(latest, results, generation, editRevisions, entries) : latest);
+      } catch (failure: unknown) {
+        const reason = failure instanceof Error ? failure.message : "Translation failed. Enter an English meaning manually or retry.";
+        const results = batch.map(row => ({ ...row, translation: "", source: null, error: reason }));
+        if (generation !== previewGeneration.current) return;
+        setPreview(latest => latest ? applyCsvTranslations(latest, results, generation, editRevisions, entries) : latest);
+      }
+    }
   }
   const toggle = (id: string) => setSelected((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
 
@@ -110,7 +145,7 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
     </form></section>}
     <section className="card">
       <div className="toolbar"><label className="field" style={{ flex: 1 }}>Search<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search words, readings, meanings…" /></label><label className="field">Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((value) => <option key={value}>{value}</option>)}</select></label>{language === "ja" && <label className="field">Kana display<select value={mode} onChange={(event) => setMode(event.target.value as "hiragana" | "katakana")}><option value="katakana">Katakana</option><option value="hiragana">Hiragana</option></select></label>}</div>
-      <div className="toolbar"><span className="muted">{visible.length} shown · {selectedEntries.length} selected</span><button className="button secondary" disabled={!visible.length} onClick={() => setSelected(visible.every((entry) => selected.includes(entry.id)) ? selected.filter((id) => !visible.some((entry) => entry.id === id)) : [...new Set([...selected, ...visible.map((entry) => entry.id)])])}>{visible.length > 0 && visible.every((entry) => selected.includes(entry.id)) ? "Deselect shown" : "Select shown"}</button><button className="button secondary" disabled={!selectedEntries.length && !visible.length} onClick={() => downloadCsv(selectedEntries.length ? selectedEntries : visible, language)}>Export {selectedEntries.length ? "selected" : "shown"} CSV</button><button className="button secondary" disabled={!lists.length || busy} onClick={() => fileInput.current?.click()}>Import CSV</button><input ref={fileInput} type="file" accept=".csv,text/csv" className="sr-only" aria-label="Upload UTF-8 CSV" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readCsv(file); event.target.value = ""; }} />
+      <div className="toolbar"><span className="muted">{visible.length} shown · {selectedEntries.length} selected</span><button className="button secondary" disabled={!visible.length} onClick={() => setSelected(visible.every((entry) => selected.includes(entry.id)) ? selected.filter((id) => !visible.some((entry) => entry.id === id)) : [...new Set([...selected, ...visible.map((entry) => entry.id)])])}>{visible.length > 0 && visible.every((entry) => selected.includes(entry.id)) ? "Deselect shown" : "Select shown"}</button><button className="button secondary" disabled={!selectedEntries.length && !visible.length} onClick={() => downloadCsv(selectedEntries.length ? selectedEntries : visible, language)}>Export {selectedEntries.length ? "selected" : "shown"} CSV</button><button className="button secondary" onClick={downloadCsvTemplate}>Download CSV template</button><button className="button secondary" disabled={!lists.length || busy} onClick={() => fileInput.current?.click()}>Import CSV</button><input ref={fileInput} type="file" accept=".csv,text/csv" className="sr-only" aria-label="Upload UTF-8 CSV" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readCsv(file); event.target.value = ""; }} />
         {selectedEntries.length > 0 && <><Link className="button" href={`/${language}/quiz?words=${selectedEntries.map((entry) => encodeURIComponent(entry.id)).join(",")}`}>Quiz selected</Link><button className="button secondary" disabled={busy} onClick={() => { if (window.confirm(`Delete ${selectedEntries.length} selected words?`)) void run(async () => { await repos.vocabulary.deleteEntries(selectedEntries.map((entry) => entry.id)); setSelected([]); setMessage("Words deleted."); }); }}>Delete selected</button></>}
       </div>
       {!ready ? <p role="status">Loading your vocabulary…</p> : !visible.length ? <div className="empty-state"><h3>{entries.length ? "No matching words" : "Your collection starts here"}</h3><p>{lists.length ? "Add a word or import a UTF-8 CSV file to get started." : "Add your first word to create a list, or create a list above before importing a UTF-8 CSV file."}</p></div> : <div className="table-scroll"><table className="vocabulary-table"><thead><tr><th><span className="sr-only">Select</span></th><th>Word / pronunciation</th><th>English meaning</th><th>Category / list</th><th>Examples / related words / notes</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{visible.map((entry) => <tr key={entry.id}>
@@ -129,6 +164,24 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
         <td><button className="button secondary" onClick={() => edit(entry)}>Edit</button></td>
       </tr>)}</tbody></table></div>}
     </section>
-    {preview && <section className="card" style={{ marginTop: 20 }}><div className="section-heading"><h2>CSV import preview</h2><button className="button secondary" onClick={() => setPreview(null)}>Close preview</button></div><p className="muted">Required: word, translation. Optional: reading, type, category, example, notes. Exact word + reading + meaning duplicates are skipped.</p><label className="field">Import into<select value={importList} onChange={(event) => setImportList(event.target.value)}>{lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label><div className="toolbar"><span className="badge">{preview.valid.length} valid</span><span className="badge">{preview.duplicates.length} duplicates</span><span className="badge">{preview.invalid.length} invalid</span></div>{preview.headerErrors.map((reason) => <p key={reason} className="notice">{reason}</p>)}<div className="table-scroll"><table><thead><tr><th>Line</th><th>Word</th><th>Meaning</th><th>Status / reason</th></tr></thead><tbody>{[...preview.valid.map((row) => ({ ...row, status: "Valid" })), ...preview.duplicates.map((row) => ({ ...row, status: "Duplicate — skipped" })), ...preview.invalid.map((row) => ({ ...row, status: "Invalid" }))].sort((a, b) => a.line - b.line).map((row) => <tr key={row.line}><td>{row.line}</td><td>{row.input.word}</td><td>{row.input.translation}</td><td>{row.errors.length ? row.errors.join(" ") : row.status}</td></tr>)}</tbody></table></div><button className="button" style={{ marginTop: 16 }} disabled={busy || !preview.valid.length || preview.headerErrors.length > 0 || !importList} onClick={() => void run(async () => { const result = await repos.vocabulary.importEntries(preview.valid.map((row) => ({ ...row.input, listId: importList }))); setPreview(null); setMessage(`Imported ${result.imported} words. ${result.duplicates} additional duplicates skipped.`); })}>Confirm import of {preview.valid.length} valid rows</button></section>}
+    {preview && <section className="card" style={{ marginTop: 20 }} aria-label="CSV import preview"><div className="section-heading"><h2>CSV import preview</h2><button className="button secondary" disabled={busy} onClick={() => { previewGeneration.current++; setPreview(null); }}>Close preview</button></div>
+      <p className="muted">Required: word. Missing English translations are looked up automatically. Optional: translation, reading, type, category, example, notes. Edit any English meaning before importing; exact word + reading + meaning duplicates are skipped.</p>
+      <label className="field">Import into<select disabled={busy} value={importList} onChange={(event) => setImportList(event.target.value)}>{lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
+      <div className="toolbar"><span className="badge">{preview.valid.length} valid</span><span className="badge">{preview.duplicates.length} duplicates</span><span className="badge">{preview.unresolved.length} unresolved</span><span className="badge">{preview.invalid.length} invalid</span><button className="button secondary" disabled={busy || !preview.unresolved.some(row => !row.resolving) || preview.headerErrors.length > 0} onClick={() => void resolveMissingTranslations(preview)}>Retry missing translations</button></div>
+      {preview.headerErrors.map(reason => <p key={reason} className="notice">{reason}</p>)}
+      <div className="table-scroll"><table><thead><tr><th>Line</th><th>Word</th><th>English meaning</th><th>Status / reason</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.line}><td>{row.line}</td><td>{row.input.word}</td><td><label className="field"><span className="sr-only">English meaning for CSV line {row.line}</span><input disabled={busy} value={row.input.translation} onChange={event => { const translation = event.target.value; setPreview(latest => latest ? editCsvTranslation(latest, row.line, translation, entries) : latest); }} /></label>{row.translationSource && <small className="muted">{row.translationSource === "csv" ? "Provided in CSV" : row.translationSource === "manual" ? "Edited manually" : row.translationSource === "cache" ? "Machine translation (cached)" : "Machine translation (" + row.translationSource + ")"}</small>}</td><td>{row.errors.length ? row.errors.join(" ") : row.resolving ? "Translating..." : row.translationError || (preview.unresolved.includes(row) ? "English meaning required. Enter one manually or retry." : preview.duplicates.includes(row) ? "Duplicate: skipped" : "Valid")}</td></tr>)}</tbody></table></div>
+      <button className="button" style={{ marginTop: 16 }} disabled={busy || !preview.valid.length || preview.headerErrors.length > 0 || !importList} onClick={() => void run(async () => {
+        const confirmed = classifyCsvRows(preview.rows, entries, language, preview.headerErrors, preview.generation);
+        const result = await repos.vocabulary.importEntries(confirmed.valid.map(row => ({ ...row.input, translation: row.input.translation.trim(), listId: importList })));
+        const processedLines = new Set([...confirmed.valid, ...confirmed.duplicates].map(row => row.line));
+        // Only a successful atomic import removes resolved rows; failures retain the entire preview.
+        setPreview(latest => {
+          if (!latest || latest.generation !== confirmed.generation) return latest;
+          const remaining = latest.rows.filter(row => !processedLines.has(row.line));
+          return remaining.length ? classifyCsvRows(remaining, entries, language, latest.headerErrors, latest.generation) : null;
+        });
+        setMessage("Imported " + result.imported + " words. " + result.duplicates + " additional duplicates skipped. Unresolved rows remain in the preview.");
+      })}>Confirm import of {preview.valid.length} valid rows</button>
+    </section>}
   </div>;
 }

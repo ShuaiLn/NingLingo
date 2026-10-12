@@ -1,11 +1,13 @@
 import type { AppRepositories } from "./contracts";
-import { VersionConflictError } from "./contracts";
+import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
 import { BrowserStorageAdapter, LOCAL_STORAGE_KEY, LocalStore, type LocalDatabase, type StorageAdapter } from "./storage";
 import { createDevelopmentSeed } from "./seed";
 import { grammarSeeds } from "@/data/grammar";
 import { vocabularyDuplicateKey } from "@/domain/csv";
 import { normalizeVocabularyDetails, vocabularyExamples } from "@/domain/vocabulary";
 import { createQuizSession, answerQuiz } from "@/domain/quiz";
+import { createAlphabetQuizSession, answerAlphabetQuiz } from "@/domain/alphabet-quiz";
+import { resolveVocabularyTranslations } from "@/services/vocabulary-translation";
 import { captureDueReview, initialWordProgress, settleQuizReview } from "@/domain/review";
 import { learningDate } from "@/domain/dates";
 import { planReadingEdit, assertLookupRange, ReadingLookupService } from "@/domain/reading";
@@ -54,6 +56,25 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
       saveEntry: (input, id) => store.transaction(data => { const entry = prepareEntry(input, data, id); const index = data.entries.findIndex(item => item.id === entry.id); if (index >= 0) data.entries[index] = entry; else { data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); } return entry; }),
       deleteEntries: ids => store.transaction(data => { ids.forEach(id => owned(data.entries.find(entry => entry.id === id), data)); data.entries = data.entries.filter(entry => entry.userId !== data.profile.id || !ids.includes(entry.id)); data.wordProgress = data.wordProgress.filter(progress => progress.userId !== data.profile.id || !ids.includes(progress.wordId)); }),
       importEntries: inputs => store.transaction(data => { let imported = 0; let duplicates = 0; for (const input of inputs) { if (personal(data.entries, data).some(entry => entry.language === input.language && vocabularyDuplicateKey(entry) === vocabularyDuplicateKey(input))) { duplicates++; continue; } const entry = prepareEntry(input, data); data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); imported++; } return { imported, duplicates }; }),
+      resolveTranslations: input => { const data = store.snapshot(); return resolveVocabularyTranslations({ ...input, userId: data.profile.id, cache: data.cache, provider: new MockTranslationProvider(), storeCache: entry => store.transaction(current => { if (current.profile.id !== entry.userId) throw new Error("The current account changed during translation."); current.cache.push(entry); }) }); },
+    },
+    alphabetQuiz: {
+      getSessions: async language => { const data = store.snapshot(); return personal(data.alphabetSessions, data).filter(session => session.language === language).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
+      getSession: async id => { const data = store.snapshot(); return owned(data.alphabetSessions.find(session => session.id === id), data); },
+      create: input => store.transaction(data => { const session = createAlphabetQuizSession({ ...input, id: crypto.randomUUID(), userId: data.profile.id, randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], learningDate: today(data) }); data.alphabetSessions.push(session); return session; }),
+      answer: (id, input) => store.transaction(data => {
+        const previous = owned(data.alphabetSessions.find(session => session.id === id), data);
+        if (previous.attempts.some(attempt => attempt.id === input.submissionId)) return previous;
+        if (previous.version !== input.version) throw new AlphabetQuizVersionConflictError(previous);
+        const next = answerAlphabetQuiz(previous, input.answer, input.submissionId);
+        const attempt = next.attempts.at(-1)!;
+        data.activity.push({ id: `alphabet-quiz:${id}:${attempt.id}`, userId: data.profile.id, language: next.language, date: learningDate(attempt.answeredAt, data.profile.timezone), kind: "alphabet-quiz", count: 1 });
+        data.alphabetSessions[data.alphabetSessions.findIndex(session => session.id === id)] = next;
+        return next;
+      }),
+      saveAndExit: (id, version) => store.transaction(data => { const session = owned(data.alphabetSessions.find(session => session.id === id), data); if (session.version !== version) throw new AlphabetQuizVersionConflictError(session); if (session.status !== "active") throw new Error("Only an active alphabet quiz can be saved."); session.status = "saved"; session.version++; session.updatedAt = now(); return session; }),
+      resume: (id, version) => store.transaction(data => { const session = owned(data.alphabetSessions.find(session => session.id === id), data); if (session.version !== version) throw new AlphabetQuizVersionConflictError(session); if (!["active", "saved"].includes(session.status)) throw new Error("This alphabet quiz has already ended."); session.status = "active"; session.version++; session.updatedAt = now(); return session; }),
+      end: (id, version) => store.transaction(data => { const session = owned(data.alphabetSessions.find(session => session.id === id), data); if (session.version !== version) throw new AlphabetQuizVersionConflictError(session); if (!["active", "saved"].includes(session.status)) return session; session.status = "ended"; session.currentQuestion = null; session.version++; session.updatedAt = now(); return session; }),
     },
     quiz: {
       getSessions: async language => { const data = store.snapshot(); return personal(data.sessions, data).filter(session => session.language === language).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
@@ -82,7 +103,7 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
       getAnnotations: async id => { const data = store.snapshot(); owned(data.readings.find(row => row.id === id), data); return personal(data.annotations, data).filter(row => row.readingId === id); },
       annotate: input => store.transaction(data => { const reading = owned(data.readings.find(row => row.id === input.readingId), data); assertLookupRange(reading, { ...input, bodyVersion: input.bodyVersion }); if (reading.body.slice(input.start, input.end) !== input.text) throw new Error("The selected text changed. Please select it again."); if (!input.translation.trim()) throw new Error("Add an English meaning for this annotation."); if (input.vocabularyEntryId) { const entry = owned(data.entries.find(row => row.id === input.vocabularyEntryId), data); if (entry.language !== reading.language) throw new Error("Link a word in this language."); } const annotation = { ...input, translation: input.translation.trim(), reading: input.reading.trim(), id: crypto.randomUUID(), userId: data.profile.id, createdAt: now() }; data.annotations = data.annotations.filter(row => !(row.readingId === annotation.readingId && row.bodyVersion === annotation.bodyVersion && row.start === annotation.start && row.end === annotation.end)); data.annotations.push(annotation); return annotation; }),
       lookup: async request => { const data = store.snapshot(); const reading = owned(data.readings.find(row => row.id === request.readingId), data); return lookupService.lookup({ userId: data.profile.id, reading, request, entries: data.entries, annotations: data.annotations, cache: data.cache, storeCache: cacheEntry => store.transaction(current => { const latest = owned(current.readings.find(row => row.id === reading.id), current); if (latest.version !== request.bodyVersion) throw new Error("The reading changed during lookup. Select the text again."); current.cache.push(cacheEntry); }) }); },
-      getCache: async () => { const data = store.snapshot(); return personal(data.cache, data); },
+      getCache: async () => { const data = store.snapshot(); return personal(data.cache, data).filter(entry => (entry.lookupKind ?? "reading") === "reading"); },
     },
     grammar: {
       getPoints: async language => structuredClone(grammarSeeds.filter(point => point.language === language)),

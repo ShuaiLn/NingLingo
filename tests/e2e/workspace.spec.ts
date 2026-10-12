@@ -26,7 +26,7 @@ test("CSV previews mixed rows, imports valid rows, exports UTF8 and edits accept
   await page.getByLabel("Upload UTF-8 CSV").setInputFiles({ name: "test.csv", mimeType: "text/csv", buffer: Buffer.from(csv, "utf8") });
   await expect(page.getByText("2 valid", { exact: true })).toBeVisible();
   await expect(page.getByText("1 duplicates", { exact: true })).toBeVisible();
-  await expect(page.getByText("1 invalid", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 unresolved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Confirm import of 2 valid rows" }).click();
   await expect(page.getByRole("status")).toContainText("Imported 2 words");
   await page.getByLabel("Search", { exact: true }).fill("prueba");

@@ -10,9 +10,10 @@ describe("CSV parsing and preview", () => {
   });
   it("reports required fields, field count, malformed quotes and physical line numbers", () => {
     const preview = previewCsv('word,translation\n,dog\n猫,\n鳥,bird,extra\n"魚,fish', [], "ja", "list");
-    expect(preview.invalid).toHaveLength(4);
+    expect(preview.invalid).toHaveLength(3);
+    expect(preview.unresolved).toHaveLength(1);
     expect(preview.invalid[0].line).toBe(2);
-    expect(preview.invalid[3].errors).toContain("Unclosed quoted field.");
+    expect(preview.invalid[2].errors).toContain("Unclosed quoted field.");
   });
   it("skips exact duplicates but retains homographs and accents", () => {
     const preview = previewCsv('word,reading,translation\n生,せい,life\n生,せい,life\n生,なま,raw\naño,,year\nano,,anus', [], "ja", "list");
@@ -23,7 +24,7 @@ describe("CSV parsing and preview", () => {
     const initial = previewCsv('word,translation\n犬,dog', [], "ja", "list").valid[0].input;
     const existing = { ...initial, id: "a", userId: "user", createdAt: "now", updatedAt: "now" };
     expect(previewCsv('word,translation\n犬,dog', [existing], "ja", "list").duplicates).toHaveLength(1);
-    expect(previewCsv('word,word\n犬,犬', [], "ja", "list").headerErrors).toContain("Missing required header: translation.");
+    expect(previewCsv('word,word\n犬,犬', [], "ja", "list").headerErrors).toContain("Repeated header: word.");
     expect(previewCsv('word,translation\n 犬 , dog ', [existing], "ja", "list").duplicates).toHaveLength(1);
   });
   it("round-trips all columns and never loses accents or empty optional fields", () => {

@@ -85,7 +85,7 @@ export function knownReadingLookup(input: ReadingLookupInput): LookupResult | nu
   if (entry) return { text, translation: entry.translation, reading: entry.reading, source: "vocabulary", vocabularyEntryId: entry.id };
   const context = contextForRange(reading.body, request.start, request.end);
   const key = translationCacheKey({ userId, language: reading.language, text, context });
-  const cached = input.cache.find(row => translationCacheKey(row) === key);
+  const cached = input.cache.find(row => (row.lookupKind ?? "reading") === "reading" && translationCacheKey(row) === key);
   if (cached) return { text, translation: cached.translation, reading: "", source: "cache", vocabularyEntryId: null };
   return null;
 }
@@ -105,7 +105,7 @@ export class ReadingLookupService {
     if (pending) return pending;
     const lookup = (async () => {
       const result = await this.provider.translate({ userId, language: reading.language, text, context });
-      await input.storeCache({ id: crypto.randomUUID(), userId, language: reading.language, text, context, translation: result.translation, source: result.source, createdAt: new Date().toISOString() });
+      await input.storeCache({ id: crypto.randomUUID(), userId, language: reading.language, text, context, translation: result.translation, source: result.source, lookupKind: "reading", createdAt: new Date().toISOString() });
       return { text, translation: result.translation, reading: "", source: result.source, vocabularyEntryId: null } satisfies LookupResult;
     })();
     this.inflight.set(key, lookup);

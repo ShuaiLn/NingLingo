@@ -96,7 +96,7 @@ describe("Cloud migrations and ownership", () => {
   it("enables RLS on every exposed domain table", async () => {
     await identity("postgres");
     const result = await db.query<{ relname: string; relrowsecurity: boolean }>("select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    expect(result.rows).toHaveLength(24);
+    expect(result.rows).toHaveLength(26);
     expect(result.rows.filter(row => !row.relrowsecurity)).toEqual([]);
   });
   it("isolates vocabulary and child records between two real database roles", async () => {

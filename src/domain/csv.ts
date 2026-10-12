@@ -1,9 +1,10 @@
 import type { LanguageCode, VocabularyEntry, VocabularyInput } from "./models";
 
 export const CSV_COLUMNS = ["word", "reading", "translation", "type", "category", "example", "notes"] as const;
+export const CSV_TEMPLATE_COLUMNS = ["word", "translation", "reading", "type", "category", "example", "notes"] as const;
 export interface CsvRecord { line: number; fields: string[]; errors: string[] }
-export interface CsvPreviewRow { line: number; input: VocabularyInput; errors: string[] }
-export interface CsvPreview { valid: CsvPreviewRow[]; duplicates: CsvPreviewRow[]; invalid: CsvPreviewRow[]; headerErrors: string[] }
+export interface CsvPreviewRow { line: number; input: VocabularyInput; errors: string[]; editRevision: number; translationSource: "csv" | "manual" | "cache" | "deepl" | "mock" | null; translationError: string; resolving: boolean }
+export interface CsvPreview { rows: CsvPreviewRow[]; valid: CsvPreviewRow[]; duplicates: CsvPreviewRow[]; invalid: CsvPreviewRow[]; unresolved: CsvPreviewRow[]; headerErrors: string[]; generation: number; language: LanguageCode }
 
 /** RFC 4180-style parser, with physical line numbers and recoverable row errors. */
 export function parseCsv(source: string): CsvRecord[] {
@@ -52,38 +53,50 @@ export function vocabularyDuplicateKey(entry: Pick<VocabularyEntry, "word" | "re
   return JSON.stringify([entry.word.normalize("NFC"), entry.reading.normalize("NFC"), entry.translation.normalize("NFC")]);
 }
 
-export function previewCsv(source: string, existing: VocabularyEntry[], language: LanguageCode, listId: string): CsvPreview {
-  const records = parseCsv(source);
-  const result: CsvPreview = { valid: [], duplicates: [], invalid: [], headerErrors: [] };
-  const header = records.shift();
-  if (!header) { result.headerErrors.push("The CSV is empty. Include a header with word and translation."); return result; }
-  const names = header.fields.map((field) => field.trim());
-  result.headerErrors.push(...header.errors);
-  for (const required of ["word", "translation"]) if (!names.includes(required)) result.headerErrors.push(`Missing required header: ${required}.`);
-  for (const name of names) {
-    if (!(CSV_COLUMNS as readonly string[]).includes(name)) result.headerErrors.push(`Unknown header: ${name || "(empty)"}.`);
-    if (names.filter((value) => value === name).length > 1) result.headerErrors.push(`Repeated header: ${name}.`);
-  }
-  result.headerErrors = [...new Set(result.headerErrors)];
+/** Only rows with a final, nonempty translation participate in duplicate classification. */
+export function classifyCsvRows(rows: CsvPreviewRow[], existing: VocabularyEntry[], language: LanguageCode, headerErrors: string[] = [], generation = 0): CsvPreview {
+  const result: CsvPreview = { rows, valid: [], duplicates: [], invalid: [], unresolved: [], headerErrors, generation, language };
   const seen = new Set(existing.filter((entry) => entry.language === language).map(vocabularyDuplicateKey));
-  for (const record of records) {
-    const get = (key: string) => { const index = names.indexOf(key); return index < 0 ? "" : (record.fields[index] ?? ""); };
-    const input: VocabularyInput = { language, listId, word: get("word").trim(), reading: get("reading").trim(), translation: get("translation").trim(), type: get("type"), category: get("category"), example: get("example"), notes: get("notes"), acceptedAnswers: [] };
-    const errors = [...new Set(record.errors)];
-    if (record.fields.length !== names.length) errors.push(`Expected ${names.length} fields; received ${record.fields.length}.`);
-    if (!input.word.trim()) errors.push("Word is required.");
-    if (!input.translation.trim()) errors.push("Translation is required.");
-    if (result.headerErrors.length) errors.push("Fix the CSV header before importing.");
-    const row = { line: record.line, input, errors };
-    if (errors.length) result.invalid.push(row);
+  for (const row of rows) {
+    if (row.errors.length || headerErrors.length) result.invalid.push(row);
+    else if (!row.input.translation.trim()) result.unresolved.push(row);
     else {
-      const key = vocabularyDuplicateKey(input);
+      const key = vocabularyDuplicateKey({ ...row.input, translation: row.input.translation.trim() });
       if (seen.has(key)) result.duplicates.push(row);
       else { seen.add(key); result.valid.push(row); }
     }
   }
   return result;
 }
+
+export function previewCsv(source: string, existing: VocabularyEntry[], language: LanguageCode, listId: string): CsvPreview {
+  const records = parseCsv(source);
+  const result = classifyCsvRows([], existing, language);
+  const header = records.shift();
+  if (!header) { result.headerErrors.push("The CSV is empty. Include a header with word."); return result; }
+  const names = header.fields.map((field) => field.trim());
+  result.headerErrors.push(...header.errors);
+  if (!names.includes("word")) result.headerErrors.push("Missing required header: word.");
+  for (const name of names) {
+    if (!(CSV_COLUMNS as readonly string[]).includes(name)) result.headerErrors.push(`Unknown header: ${name || "(empty)"}.`);
+    if (names.filter((value) => value === name).length > 1) result.headerErrors.push(`Repeated header: ${name}.`);
+  }
+  result.headerErrors = [...new Set(result.headerErrors)];
+  for (const record of records) {
+    const get = (key: string) => { const index = names.indexOf(key); return index < 0 ? "" : (record.fields[index] ?? ""); };
+    const input: VocabularyInput = { language, listId, word: get("word").trim(), reading: get("reading").trim(), translation: get("translation").trim(), type: get("type"), category: get("category"), example: get("example"), notes: get("notes"), acceptedAnswers: [] };
+    const errors = [...new Set(record.errors)];
+    if (record.fields.length !== names.length) errors.push(`Expected ${names.length} fields; received ${record.fields.length}.`);
+    if (!input.word.trim()) errors.push("Word is required.");
+    if (input.word.length > 2000) errors.push("Word must contain at most 2,000 characters.");
+    if (result.headerErrors.length) errors.push("Fix the CSV header before importing.");
+    result.rows.push({ line: record.line, input, errors, editRevision: 0, translationSource: input.translation ? "csv" : null, translationError: "", resolving: false });
+  }
+  return classifyCsvRows(result.rows, existing, language, result.headerErrors);
+}
+
+/** A new template puts the only required column and optional English meaning first. */
+export function vocabularyCsvTemplate(): string { return "\uFEFF" + CSV_TEMPLATE_COLUMNS.join(",") + "\r\n"; }
 
 export function exportCsv(entries: Pick<VocabularyEntry, typeof CSV_COLUMNS[number]>[], includeBom = true): string {
   const quote = (value: string) => /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;

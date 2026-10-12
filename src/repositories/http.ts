@@ -1,6 +1,6 @@
 import type { AppRepositories } from "./contracts";
-import { VersionConflictError } from "./contracts";
-import type { QuizSession } from "@/domain/models";
+import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
+import type { AlphabetQuizSession, QuizSession } from "@/domain/models";
 import { browserSupabase } from "@/lib/supabase/browser";
 import type { AuthChangeEvent } from "@supabase/supabase-js";
 /** Browser facade: persistence and grading are authenticated server operations. */
@@ -22,9 +22,9 @@ export function createHttpRepositories(onSessionExpired: () => void): AppReposit
     if (!mutation && pending.has(key)) return pending.get(key) as Promise<T>;
     const request = (async () => {
       const response = await fetch("/api/repository", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation, args }), credentials: "same-origin", cache: "no-store" });
-      const result = await response.json() as { data?: T; error?: string; latest?: QuizSession };
+      const result = await response.json() as { data?: T; error?: string; latest?: QuizSession | AlphabetQuizSession };
       if (response.status === 401) { onSessionExpired(); throw new Error("Your session expired. Please sign in again."); }
-      if (response.status === 409 && result.latest) { refresh(); throw new VersionConflictError(result.latest); }
+      if (response.status === 409 && result.latest) { refresh(); if (operation.startsWith("alphabetQuiz.")) throw new AlphabetQuizVersionConflictError(result.latest as AlphabetQuizSession); throw new VersionConflictError(result.latest as QuizSession); }
       if (!response.ok) throw new Error(result.error ?? "Could not complete the cloud operation. Please try again.");
       if (mutation) { refresh(); channel?.postMessage("changed"); }
       return result.data as T;
@@ -44,6 +44,15 @@ export function createHttpRepositories(onSessionExpired: () => void): AppReposit
       saveEntry: (input, id) => call("vocabulary.save", { input, id }, true),
       deleteEntries: ids => call("vocabulary.delete", { ids }, true),
       importEntries: inputs => call("vocabulary.import", { inputs }, true),
+      resolveTranslations: input => call("vocabulary.resolveTranslations", input),
+    },
+    alphabetQuiz: {
+      getSessions: language => call("alphabetQuiz.sessions", { language }), getSession: id => call("alphabetQuiz.session", { id }),
+      create: input => call("alphabetQuiz.create", input, true),
+      answer: (id, input) => call("alphabetQuiz.answer", { id, ...input }, true),
+      saveAndExit: (id, version) => call("alphabetQuiz.save", { id, version }, true),
+      resume: (id, version) => call("alphabetQuiz.resume", { id, version }, true),
+      end: (id, version) => call("alphabetQuiz.end", { id, version }, true),
     },
     quiz: {
       getSessions: language => call("quiz.sessions", { language }), getSession: id => call("quiz.session", { id }),
