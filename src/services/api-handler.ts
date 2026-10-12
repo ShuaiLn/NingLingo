@@ -5,10 +5,22 @@ import { serverSupabase } from "@/lib/supabase/server";
 import { createSupabaseRepositories } from "@/repositories/supabase";
 import { VersionConflictError } from "@/repositories/contracts";
 import { executeRepositoryOperation } from "./repository-operations";
+function acceptsOrigin(request: Request): boolean {
+  if (request.headers.get("sec-fetch-site") === "cross-site") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  // Next can construct an internal localhost URL while the browser uses the
+  // incoming Host. HTTPS terminates at the hosting proxy before reaching Next.
+  const url = new URL(request.url);
+  const host = request.headers.get("host") ?? url.host;
+  const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0].trim() ?? url.protocol.slice(0, -1);
+  if (!["http", "https"].includes(protocol)) return false;
+  try { return new URL(origin).origin === new URL(`${protocol}://${host}`).origin && origin !== "null"; }
+  catch { return false; }
+}
 export async function repositoryRequest(request: Request, fixedOperation?: string, extra: Record<string, unknown> = {}) {
   const respond = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "private, no-store" } });
-  const origin = request.headers.get("origin");
-  if ((origin && origin !== new URL(request.url).origin) || request.headers.get("sec-fetch-site") === "cross-site") return respond({ error: "Cross-origin operations are not allowed." }, 403);
+  if (!acceptsOrigin(request)) return respond({ error: "Cross-origin operations are not allowed." }, 403);
   if (!request.headers.get("content-type")?.includes("application/json")) return respond({ error: "A JSON request is required." }, 415);
   try {
     const supabase = await serverSupabase();

@@ -156,6 +156,16 @@ describe("transactional vocabulary and legacy CSV expansion", () => {
 });
 
 describe("versioned Reading transactions", () => {
+  it.each(["edit", "annotation"])("rejects stale %s versions with a non-retryable SQLSTATE", async operation => {
+    const input = { language: "es", title: "Conflict regression", body: "Un café.", status: "reading" };
+    const reading = await rpc<{ id: string }>("nl_save_reading", [input]);
+    await rpc("nl_save_reading", [{ ...input, body: "Nuevo café." }, reading.id, false, 1]);
+    const stale = operation === "edit"
+      ? rpc("nl_save_reading", [input, reading.id, true, 1])
+      : rpc("nl_annotate_reading", [{ readingId: reading.id, bodyVersion: 1, start: 0, end: 2, text: "Un", translation: "a" }]);
+    await expect(stale).rejects.toMatchObject({ code: "22023" });
+    expect(await rpc("nl_reading", [reading.id])).toMatchObject({ version: 2, body: "Nuevo café." });
+  });
   it("validates UTF-16 positions after emoji and preserves Greek accents", async () => {
     const reading = await rpc<{ id: string; version: number }>("nl_save_reading", [{ language: "el", title: "Καφές", body: "😀 καφές!", status: "reading" }]);
     const annotation = await rpc("nl_annotate_reading", [{ readingId: reading.id, bodyVersion: 1, start: 3, end: 8, text: "καφές", translation: "coffee", reading: "", vocabularyEntryId: null }]);

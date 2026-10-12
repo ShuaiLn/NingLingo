@@ -4,13 +4,16 @@ import { chromium } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
+import { mkdirSync, createWriteStream } from 'node:fs';
+import { verifyCloudScenarios } from './cloud-scenarios.mjs';
 nextEnv.loadEnvConfig(process.cwd());
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const admin = createClient(url, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 const base = process.env.NINGLINGO_CLOUD_TEST_URL ?? 'http://127.0.0.1:3101';
 const ownedUsers = [];
-let server, browser, passed = 0;
+let server, serverLog, browser, passed = 0;
+let existingUserIds = [];
 function check(condition, message) { assert.ok(condition, message); passed++; }
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function account() {
@@ -24,9 +27,23 @@ async function account() {
   return { email, password, id: data.user.id, client };
 }
 try {
+  const existing = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  check(!existing.error && existing.data.users.length > 0, 'The permanent personal account is unavailable');
+  existingUserIds = existing.data.users.map(user => user.id);
+  const profiles = await admin.from('profiles').select('user_id').in('user_id', existingUserIds);
+  check(!profiles.error && profiles.data.length === existingUserIds.length, 'An existing account is missing its migrated profile');
   const a = await account(), b = await account();
   if (!process.env.NINGLINGO_CLOUD_TEST_URL) {
-    server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', '3101'], { env: { ...process.env, NINGLINGO_REPOSITORY_MODE: '' }, stdio: 'ignore', windowsHide: true });
+    mkdirSync('.local-preview', { recursive: true });
+    serverLog = createWriteStream('.local-preview/cloud-server.log', { flags: 'w' });
+    const redact = value => {
+      let result = String(value).replace(/cookie:[^\r\n]*/gi, 'cookie: [redacted]');
+      for (const name of ['SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'DEEPL_API_KEY', 'DATABASE_URL', 'SUPABASE_ACCESS_TOKEN']) if (process.env[name]) result = result.split(process.env[name]).join('[redacted]');
+      return result;
+    };
+    server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', '3101'], { env: { ...process.env, NINGLINGO_REPOSITORY_MODE: '' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    server.stdout.on('data', value => serverLog.write(redact(value)));
+    server.stderr.on('data', value => serverLog.write(redact(value)));
     let available = false;
     for (let count = 0; count < 120; count++) { try { if ((await fetch(`${base}/login`)).ok) { available = true; break; } } catch { /* Server is starting. */ } await pause(1000); }
     if (!available) throw new Error('Production-mode verification server could not start.');
@@ -69,16 +86,33 @@ try {
   check(!foreignMutation.error && foreignMutation.data.length === 0, 'Cross-user mutation succeeded');
   const forbiddenStage = await a.client.from('word_progress').update({ stage: 6 }).eq('user_id', a.id);
   check(Boolean(forbiddenStage.error), 'Client forged SRS advancement');
+  const { issues } = await verifyCloudScenarios({ a, b, admin, base, browser, context, check });
   console.log(`Live cloud repository/security: ${passed} total assertions passed.`);
+  for (const issue of issues) console.error(`Unresolved cloud check: ${issue}`);
+  if (issues.length) process.exitCode = 1;
 } catch (error) {
-  console.error(error instanceof Error ? error.message : 'Cloud verification failed.');
+  // Browser exceptions may contain session cookies in subsequent call-log lines.
+  console.error(error instanceof Error ? error.message.split('\n')[0] : 'Cloud verification failed.');
   process.exitCode = 1;
 } finally {
   await browser?.close();
   server?.kill();
+  serverLog?.end();
+  let removedCount = 0;
   for (const id of ownedUsers) {
     const removed = await admin.auth.admin.deleteUser(id);
     if (removed.error) { console.error('A temporary verification user could not be removed. Re-run cleanup before production use.'); process.exitCode = 1; }
+    else removedCount++;
   }
-  console.log(`Cloud verification cleanup: ${ownedUsers.length} temporary accounts removed.`);
+  const remaining = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  const remainingIds = remaining.data?.users.map(user => user.id) ?? [];
+  if (remaining.error || ownedUsers.some(id => remainingIds.includes(id)) || existingUserIds.some(id => !remainingIds.includes(id))) {
+    console.error('Cloud verification cleanup/account preservation check failed.'); process.exitCode = 1;
+  }
+  for (const table of ['profiles','vocabulary_lists','vocabulary_entries','word_progress','quiz_sessions','learning_activity','readings','translation_cache','grammar_progress']) {
+    if (!ownedUsers.length) break;
+    const leftovers = await admin.from(table).select('user_id').in('user_id', ownedUsers).limit(1);
+    if (leftovers.error || leftovers.data.length) { console.error(`Temporary fixture cleanup failed for ${table}.`); process.exitCode = 1; }
+  }
+  console.log(`Cloud verification cleanup: ${removedCount} temporary accounts removed; existing accounts preserved; owned fixtures removed.`);
 }

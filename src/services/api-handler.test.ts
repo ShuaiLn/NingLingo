@@ -28,6 +28,25 @@ describe("server repository authentication boundary", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect((await response.json()).data.timezone).toBe("America/Tijuana");
   });
+  it.each([
+    { host: "127.0.0.1:3101", origin: "http://127.0.0.1:3101", protocol: "http" },
+    { host: "ninglingo.example", origin: "https://ninglingo.example", protocol: "https" },
+  ])("accepts the incoming browser origin when Next uses an internal URL: $origin", async ({ host, origin, protocol }) => {
+    mocks.getUser.mockResolvedValue({ data: { user: { id: "verified" } }, error: null });
+    mocks.createRepositories.mockReturnValue(createLocalRepositories());
+    const incoming = new Request("http://localhost:3101/api/repository", { method: "POST", headers: { "Content-Type": "application/json", Host: host, Origin: origin, "X-Forwarded-Proto": protocol, "Sec-Fetch-Site": "same-origin" }, body: JSON.stringify({ operation: "settings.profile", args: {} }) });
+    expect((await repositoryRequest(incoming)).status).toBe(200);
+  });
+  it.each([
+    { origin: "https://attacker.invalid", site: "same-origin" },
+    { origin: "https://ninglingo.example", site: "cross-site" },
+    { origin: "null", site: "same-origin" },
+    { origin: "http://ninglingo.example", site: "same-origin" },
+  ])("rejects foreign, opaque and cross-site origins even with forwarded headers: $origin / $site", async ({ origin, site }) => {
+    const incoming = new Request("http://localhost:3101/api/repository", { method: "POST", headers: { "Content-Type": "application/json", Host: "ninglingo.example", Origin: origin, "X-Forwarded-Proto": "https", "X-Forwarded-Host": "attacker.invalid", "Sec-Fetch-Site": site }, body: JSON.stringify({ operation: "settings.profile", args: {} }) });
+    expect((await repositoryRequest(incoming)).status).toBe(403);
+    expect(mocks.getUser).not.toHaveBeenCalled();
+  });
   it("returns a version conflict with the latest session for multi-device recovery", async () => {
     const repos = createLocalRepositories();
     const words = await repos.vocabulary.getEntries("ja");

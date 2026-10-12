@@ -1,6 +1,8 @@
 # NingLingo Cloud database
 
-`migrations/001_…011_*.sql` is the ordered, reproducible PostgreSQL schema. These files are tested against embedded PostgreSQL with Supabase Auth identity stubs; neither Docker nor local Supabase is used. Tests do not imply that migrations have been applied to Cloud.
+`migrations/001_…012_*.sql` is the ordered, reproducible PostgreSQL schema. These files are tested against embedded PostgreSQL with Supabase Auth identity stubs; neither Docker nor local Supabase is used. Tests do not imply that migrations have been applied to Cloud.
+
+The owner applied 001–011 directly to Cloud. Live verification found that Reading version conflicts raised SQLSTATE `40001`, triggering PostgREST transaction retries. Apply **only `012_reading_conflict_errors.sql`** to that existing project: it preserves both Reading functions and their grants while replacing application-conflict errors with non-retryable `22023`. Original migrations remain immutable. Do not rerun initial migrations or assume manually applied SQL populated the runner's checksum-history table.
 
 Run `node scripts/migrate-cloud.mjs --check` to validate the file sequence without connecting. `node scripts/migrate-cloud.mjs` applies each unapplied migration transactionally through the [Supabase Management API](https://supabase.com/docs/reference/api/v1-run-a-query), records SHA-256 checksums in the private `ninglingo_internal.applied_migrations` table, refuses rewritten/out-of-order history, and verifies the resulting history. It requires an authorized server-side `SUPABASE_ACCESS_TOKEN` with database write access. The project reference is derived from the existing `NEXT_PUBLIC_SUPABASE_URL`; `SUPABASE_PROJECT_REF` is only necessary for a custom Supabase API domain. Publishable and secret/service-role Data API keys cannot execute DDL. The runner never prints credential values.
 
