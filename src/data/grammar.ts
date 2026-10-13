@@ -1,4 +1,8 @@
 import type { GrammarPoint } from "@/domain/models";
+import korean from "../../content/grammar/generated/ko.json";
+
+/** AI publication is independent of development samples and the reviewed 240-lesson release. */
+export const koreanGrammar = korean as GrammarPoint[];
 
 const metadata = {
   status: "draft" as const, reviewer: null, contentVersion: 1, developmentSeed: true,
@@ -44,3 +48,5 @@ export const grammarSeeds: GrammarPoint[] = [
     ],
   },
 ];
+
+export const grammarLessons: GrammarPoint[] = [...grammarSeeds, ...koreanGrammar];

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { alphabetEntries } from "@/data/alphabet";
 import type { AlphabetEntry, AlphabetQuizSession, VocabularyEntry } from "./models";
-import { answerAlphabetQuiz, createAlphabetQuizSession } from "./alphabet-quiz";
+import { alphabetMcqEligibility, answerAlphabetQuiz, createAlphabetQuizSession } from "./alphabet-quiz";
 import { answerQuiz, createQuizSession } from "./quiz";
 
 const now = "2026-10-11T11:00:00.000Z";
@@ -118,5 +118,95 @@ describe("Alphabet reuses Vocabulary randomization and retry rules", () => {
         .toEqual(vocabulary.reservations.map(item => ({ ...item, itemId: undefined })));
     }
     expect(alphabet.status).toBe("completed");
+  });
+});
+
+describe("Alphabet frozen four-option questions", () => {
+  const create = (language: AlphabetEntry["language"], direction: "character-to-pronunciation" | "pronunciation-to-character" | "mixed", randomSeed = 24) => createAlphabetQuizSession({ id: "mcq", userId: "user", language,
+    itemIds: alphabetEntries.filter(item => item.language === language).map(item => item.id), mode: "mcq", direction, randomSeed, learningDate: "2026-10-12", now });
+  it.each(["ja", "es", "el", "ko"] as const)("creates uniquely defensible frozen options in both directions for %s", language => {
+    for (const direction of ["character-to-pronunciation", "pronunciation-to-character", "mixed"] as const) {
+      const quiz = create(language, direction);
+      expect(quiz.items.length).toBeGreaterThan(0);
+      expect(quiz.questionTemplates).toHaveLength(quiz.items.length);
+      for (const question of quiz.questionTemplates) {
+        expect(question.mode).toBe("mcq");
+        if (direction !== "mixed") expect(question.direction).toBe(direction);
+        expect(question.options).toHaveLength(4);
+        expect(new Set(question.options!.map(option => option.id)).size).toBe(4);
+        expect(new Set(question.options!.map(option => option.text.normalize("NFC").trim().toLowerCase())).size).toBe(4);
+        expect(question.options!.filter(option => option.id === question.correctOptionId)).toHaveLength(1);
+        const target = quiz.items.find(item => item.itemId === question.itemId)!;
+        const defensible = question.direction === "character-to-pronunciation"
+          ? question.options!.filter(option => option.pronunciationAnswers.some(value => target.pronunciationAnswers.includes(value)))
+          : question.options!.filter(option => option.pronunciationAnswers.includes(question.prompt));
+        expect(defensible.map(option => option.id)).toEqual([question.correctOptionId]);
+      }
+    }
+  });
+  it("keeps homophone targets in both directions and removes their competing choices", () => {
+    for (const direction of ["character-to-pronunciation", "pronunciation-to-character"] as const) {
+      const quiz = create("ja", direction);
+      for (const symbol of ["じ", "ぢ", "ジ", "ヂ"]) {
+        const target = quiz.items.find(item => item.symbol === symbol)!;
+        expect(target).toBeDefined();
+        const question = quiz.questionTemplates.find(question => question.itemId === target.itemId)!;
+        expect(question.options!.filter(option => option.pronunciationAnswers.includes("ji"))).toHaveLength(1);
+      }
+    }
+  });
+  it("checks each direction independently and uses only an enabled feasible direction", () => {
+    const source = [
+      { ...alphabetEntries[0], id: "target", symbol: "X", pronunciationAnswers: ["x", "y"] },
+      { ...alphabetEntries[0], id: "y", symbol: "Y", pronunciationAnswers: ["y"] },
+      { ...alphabetEntries[0], id: "z", symbol: "Z", pronunciationAnswers: ["z"] },
+      { ...alphabetEntries[0], id: "v", symbol: "V", pronunciationAnswers: ["v"] },
+    ];
+    expect(alphabetMcqEligibility(source[0], "mixed", source)).toMatchObject({ feasible: ["pronunciation-to-character"], skipped: [{ direction: "character-to-pronunciation" }] });
+    const input = { id: "s", userId: "user", language: "ja" as const, itemIds: ["target"], mode: "mcq" as const, randomSeed: 7, learningDate: "2026-10-12", sourceEntries: source };
+    expect(() => createAlphabetQuizSession({ ...input, direction: "character-to-pronunciation" })).toThrow("cannot form four");
+    const quiz = createAlphabetQuizSession({ ...input, direction: "mixed" });
+    expect(quiz.currentQuestion?.direction).toBe("pronunciation-to-character");
+    expect(quiz.configuration.skippedItems).toHaveLength(1);
+  });
+  it("tries alternative distractors when overlapping variants block a greedy choice", () => {
+    const source = [
+      { ...alphabetEntries[0], id: "t", pronunciationAnswers: ["t"] },
+      { ...alphabetEntries[0], id: "xy", pronunciationAnswers: ["x", "y"] },
+      { ...alphabetEntries[0], id: "x", pronunciationAnswers: ["x"] },
+      { ...alphabetEntries[0], id: "y", pronunciationAnswers: ["y"] },
+      { ...alphabetEntries[0], id: "z", pronunciationAnswers: ["z"] },
+    ];
+    expect(alphabetMcqEligibility(source[0], "character-to-pronunciation", source).feasible).toEqual(["character-to-pronunciation"]);
+  });
+  it("freezes options, option order, direction and correct ID through retries, serialization and changed live content", () => {
+    const source = structuredClone(alphabetEntries.filter(item => item.language === "ja"));
+    const original = createAlphabetQuizSession({ id: "s", userId: "user", language: "ja", itemIds: [source[0].id], mode: "mcq", direction: "mixed", sourceEntries: source, randomSeed: 9, learningDate: "2026-10-12" });
+    const frozen = structuredClone(original.currentQuestion!);
+    expect(() => answerAlphabetQuiz(original, frozen.options![0].text, "invalid")).toThrow("frozen answer options");
+    let quiz = answerAlphabetQuiz(original, frozen.options!.find(option => option.id !== frozen.correctOptionId)!.id, "wrong");
+    for (const item of source) { item.symbol = "changed"; item.pronunciationAnswers = ["changed"]; }
+    quiz = JSON.parse(JSON.stringify({ ...quiz, status: "saved" })) as AlphabetQuizSession;
+    quiz.status = "active";
+    expect(quiz.currentQuestion).toMatchObject({ options: frozen.options, direction: frozen.direction, correctOptionId: frozen.correctOptionId });
+    quiz = answerAlphabetQuiz(quiz, frozen.correctOptionId!, "correct");
+    expect(quiz.status).toBe("completed");
+    expect(quiz.questions.every(question => JSON.stringify(question.options) === JSON.stringify(frozen.options))).toBe(true);
+    expect(quiz.attempts.map(attempt => [attempt.kind, attempt.correct])).toEqual([["initial", false], ["retry", true]]);
+    expect(answerAlphabetQuiz(quiz, "changed replay", "correct")).toBe(quiz);
+    expect(quiz.questionTemplates).toEqual(original.questionTemplates);
+  });
+  it("has stable templates and scheduler RNG for a fixed selection and seed", () => {
+    expect(create("el", "mixed", 123)).toEqual(create("el", "mixed", 123));
+    expect(create("el", "mixed", 124).questionTemplates).not.toEqual(create("el", "mixed", 123).questionTemplates);
+  });
+  it("recomputes feasibility for later creations after source content changes", () => {
+    const source = ["a", "i", "u", "e"].map((sound, index) => ({ ...alphabetEntries[0], id: `source-${index}`, symbol: `symbol-${index}`, pronunciationAnswers: [sound] }));
+    const input = { id: "s", userId: "user", language: source[0].language, itemIds: [source[0].id], mode: "mcq" as const,
+      direction: "character-to-pronunciation" as const, sourceEntries: source, randomSeed: 18, learningDate: "2026-10-12" };
+    const frozen = createAlphabetQuizSession(input);
+    source[1].pronunciationAnswers = ["a"];
+    expect(() => createAlphabetQuizSession({ ...input, id: "later" })).toThrow("cannot form four");
+    expect(answerAlphabetQuiz(frozen, frozen.currentQuestion!.correctOptionId!, "frozen-answer").attempts[0].correct).toBe(true);
   });
 });

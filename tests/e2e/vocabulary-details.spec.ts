@@ -64,7 +64,8 @@ test("Japanese examples use explicit ruby/kana and shared audio without changing
   await expect(page.locator(".vocabulary-example rt")).toHaveText("コイヌガスキデス。");
   const before = await page.evaluate(() => localStorage.getItem("ninglingo:development:v1"));
   await page.getByRole("button", { name: "Play example 1 of 子犬", exact: true }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-last-spoken", "こいぬがすきです。");
+  // Speech uses the saved native source; kana remains explicit display metadata.
+  await expect(page.locator("html")).toHaveAttribute("data-last-spoken", "子犬が好きです。");
   expect(await page.evaluate(() => localStorage.getItem("ninglingo:development:v1"))).toBe(before);
   await page.getByRole("combobox", { name: "Kana display", exact: true }).selectOption("hiragana");
   await expect(page.locator(".vocabulary-example rt")).toHaveText("こいぬがすきです。");

@@ -19,7 +19,7 @@ test.beforeEach(async ({ context }) => {
     }
     Object.defineProperty(window, "SpeechSynthesisUtterance", { configurable: true, value: TestUtterance });
     Object.defineProperty(window, "speechSynthesis", { configurable: true, value: {
-      getVoices: () => [{ name: "Japanese", lang: "ja-JP" }, { name: "Spanish", lang: "es-ES" }, { name: "Greek", lang: "el-GR" }],
+      getVoices: () => [{ name: "Japanese", lang: "ja-JP" }, { name: "Spanish", lang: "es-ES" }, { name: "Greek", lang: "el-GR" }, { name: "Korean", lang: "ko-KR" }],
       cancel: () => undefined,
       speak: (utterance: TestUtterance) => { document.documentElement.dataset.alphabetSpoken = utterance.text; window.setTimeout(() => utterance.onend?.(), 5); },
       addEventListener: () => undefined,
@@ -233,4 +233,66 @@ test("older completed Alphabet history remains accessible through Show more", as
   await history.getByRole("link", { name: "View alphabet quiz", exact: true }).last().click();
   await expect(page.getByText("Alphabet practice ended", { exact: true })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("session")).toBe(sessions[0].id);
+});
+
+test("Alphabet MCQ freezes four options through keyboard selection, retry, refresh and history", async ({ page }) => {
+  await page.goto("/ja/alphabet");
+  await page.getByLabel("Alphabet question type", { exact: true }).selectOption("mcq");
+  await page.getByLabel("Alphabet direction", { exact: true }).selectOption("mixed");
+  await page.getByRole("button", { name: "Start alphabet quiz", exact: true }).click();
+  await expect(page.getByRole("radio")).toHaveCount(4);
+  // Narrow the fixture to one tested character without altering its frozen template.
+  const created = await latest(page);
+  const selected = created.currentQuestion!;
+  await page.evaluate(({ key, id, itemId }) => {
+    const data = JSON.parse(window.localStorage.getItem(key)!);
+    const session = data.alphabetSessions.find((item: { id: string }) => item.id === id);
+    session.items = session.items.filter((item: { itemId: string }) => item.itemId === itemId);
+    session.questionTemplates = session.questionTemplates.filter((item: { itemId: string }) => item.itemId === itemId);
+    session.configuration.retryRange = [0, 0];
+    window.localStorage.setItem(key, JSON.stringify(data));
+  }, { key: storageKey, id: created.id, itemId: selected.itemId });
+  await page.reload();
+  const initial = await latest(page);
+  const frozen = initial.currentQuestion!;
+  const wrong = frozen.options!.find(option => option.id !== frozen.correctOptionId)!;
+  await page.locator(`input[type="radio"][value="${wrong.id}"]`).focus();
+  await page.keyboard.press("Space");
+  await page.getByRole("button", { name: "Check answer", exact: true }).click();
+  await expect(page.locator(".quiz-feedback")).toContainText("scheduled for another try");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  expect((await latest(page)).currentQuestion?.options).toEqual(frozen.options);
+  await page.getByRole("button", { name: "Save & exit", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "Resume alphabet quiz", exact: true }).click();
+  await expect(page.getByRole("radio")).toHaveCount(4);
+  expect((await latest(page)).currentQuestion).toMatchObject({ options: frozen.options, direction: frozen.direction, correctOptionId: frozen.correctOptionId });
+  await page.locator(`input[type="radio"][value="${frozen.correctOptionId}"]`).check();
+  await page.getByRole("button", { name: "Check answer", exact: true }).click();
+  await page.getByRole("button", { name: "See results", exact: true }).click();
+  await expect(page.getByLabel("Alphabet answer history").locator("article")).toHaveCount(2);
+  await page.reload();
+  await expect(page.getByLabel("Alphabet answer history").locator("article")).toHaveCount(2);
+  const history = await latest(page);
+  expect(history.questions.every(question => JSON.stringify(question.options) === JSON.stringify(frozen.options))).toBe(true);
+});
+
+test("Korean automatic Alphabet playback uses Hangul and waits until feedback is dismissed", async ({ page }) => {
+  await page.goto("/ko/alphabet");
+  await page.getByLabel("Automatic alphabet audio", { exact: true }).check();
+  await page.getByRole("button", { name: "Start alphabet quiz", exact: true }).click();
+  await expect(page.locator(".alphabet-quiz-card")).toBeVisible();
+  const session = await latest(page);
+  const first = session.items.find(item => item.itemId === session.currentQuestion!.itemId)!;
+  await expect(page.locator("html")).toHaveAttribute("data-alphabet-spoken", first.audioText);
+  expect(first.audioText).toMatch(/[\uAC00-\uD7A3]/);
+  await answer(page, session.currentQuestion!.acceptedAnswers[0]);
+  const next = await latest(page);
+  await expect(page.locator("html")).toHaveAttribute("data-alphabet-spoken", first.audioText);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const second = next.items.find(item => item.itemId === next.currentQuestion!.itemId)!;
+  await expect(page.locator("html")).toHaveAttribute("data-alphabet-spoken", second.audioText);
+  await page.getByRole("button", { name: "Save & exit", exact: true }).click();
+  await page.reload();
+  await expect(page.getByLabel("Automatic alphabet audio", { exact: true })).toBeChecked();
 });

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import spanish from '../content/grammar/authoring/es.mjs';
 import greek from '../content/grammar/authoring/el.mjs';
+import { buildKoreanDataset } from './grammar-build-ko.mjs';
 
 const root = new URL('../', import.meta.url);
 const pin = '0d1d3410bec90bd4098a7c72de820543cb4f707c';
@@ -101,4 +102,5 @@ const manifest = {
   datasets: Object.entries(datasets).map(([language, points]) => ({ language, lessons: points.length, examples: points.reduce((n, p) => n + p.examples.length, 0), exercises: points.reduce((n, p) => n + p.exercises.length, 0), sha256: createHash('sha256').update(`${JSON.stringify(points, null, 2)}\n`).digest('hex') })),
 };
 await writeFile(new URL('content/grammar/manifest.json', root), `${JSON.stringify(manifest, null, 2)}\n`);
+await buildKoreanDataset();
 console.log(`Prepared ${Object.values(datasets).flat().length} draft lessons at ${fileURLToPath(new URL('content/grammar/generated/', root))}. Human review remains pending.`);

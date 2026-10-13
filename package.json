@@ -15,13 +15,17 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "db:check": "node scripts/migrate-cloud.mjs --check",
+    "db:inspect": "node scripts/inspect-cloud-schema.mjs",
     "db:migrate": "node scripts/migrate-cloud.mjs",
     "grammar:build": "node scripts/grammar-build.mjs",
     "grammar:validate": "node --experimental-strip-types scripts/grammar-validate.mjs",
     "grammar:import": "node --experimental-strip-types scripts/grammar-import.mjs",
+    "grammar:publish:ko": "node --experimental-strip-types scripts/publish-korean-grammar.mjs --import",
+    "grammar:verify:ko": "node --experimental-strip-types scripts/publish-korean-grammar.mjs",
     "security:bundle": "node scripts/check-client-secrets.mjs",
     "test:cloud": "node scripts/verify-cloud.mjs",
-    "test:cloud:alphabet": "node scripts/verify-alphabet-cloud.mjs"
+    "test:cloud:alphabet": "node scripts/verify-alphabet-cloud.mjs",
+    "test:cloud:extensions": "node scripts/verify-extension-cloud.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

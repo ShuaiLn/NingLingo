@@ -15,7 +15,7 @@ export async function proxy(request: NextRequest) {
     },
   } });
   const { data, error } = await supabase.auth.getClaims();
-  if ((!data?.claims || error) && /^\/(ja|es|el)(\/|$)/.test(request.nextUrl.pathname)) {
+  if ((!data?.claims || error) && /^\/(ja|es|el|ko)(\/|$)/.test(request.nextUrl.pathname)) {
     const target = new URL("/login", request.url);
     target.searchParams.set("next", request.nextUrl.pathname);
     const redirect = NextResponse.redirect(target);
@@ -25,4 +25,4 @@ export async function proxy(request: NextRequest) {
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }
-export const config = { matcher: ["/ja/:path*", "/es/:path*", "/el/:path*", "/api/:path*", "/login", "/signup", "/auth/:path*"] };
+export const config = { matcher: ["/ja/:path*", "/es/:path*", "/el/:path*", "/ko/:path*", "/api/:path*", "/login", "/signup", "/auth/:path*"] };

@@ -43,6 +43,61 @@ const spanish: [string, string, string, string, string, string[]][] = [
 const greek: [string, string, string, string, string, string, string[]][] = [
   ["Α","α","άλφα","ah","αγάπη","love",["a","ah"]],["Β","β","βήτα","v","βιβλίο","book",["v"]],["Γ","γ","γάμμα","voiced throaty sound; softer before e/i","γάτα","cat",["gh","y"]],["Δ","δ","δέλτα","th as in this","δέντρο","tree",["dh"]],["Ε","ε","έψιλον","eh","ένα","one",["e","eh"]],["Ζ","ζ","ζήτα","z","ζάχαρη","sugar",["z"]],["Η","η","ήτα","ee","ήλιος","sun",["i","ee"]],["Θ","θ","θήτα","th as in thin","θάλασσα","sea",["th"]],["Ι","ι","γιώτα","ee","ιστορία","history",["i","ee"]],["Κ","κ","κάππα","k","καφές","coffee",["k"]],["Λ","λ","λάμδα","l","λεμόνι","lemon",["l"]],["Μ","μ","μι","m","μήλο","apple",["m"]],["Ν","ν","νι","n","νερό","water",["n"]],["Ξ","ξ","ξι","ks","ξύλο","wood",["ks","x"]],["Ο","ο","όμικρον","oh","όνομα","name",["o","oh"]],["Π","π","πι","p","πόρτα","door",["p"]],["Ρ","ρ","ρο","tapped or trilled r","ρύζι","rice",["r"]],["Σ","σ","σίγμα","s","σπίτι","house",["s"]],["Τ","τ","ταυ","t","τυρί","cheese",["t"]],["Υ","υ","ύψιλον","ee","ύπνος","sleep",["i","ee"]],["Φ","φ","φι","f","φως","light",["f","ph"]],["Χ","χ","χι","unvoiced throaty sound; softer before e/i","χέρι","hand",["kh","h"]],["Ψ","ψ","ψι","ps","ψωμί","bread",["ps"]],["Ω","ω","ωμέγα","oh","ώρα","hour",["o","oh"]],
 ];
+type HangulRow = [symbol: string, name: string, sound: string, answers: string[], example: string, translation: string, note: string];
+const hangulConsonants: HangulRow[] = [
+  ["ㄱ", "기역", "g before a vowel; unreleased k as a final", ["g", "k"], "가방", "bag", "Combine ㄱ + ㅏ as 가. Final ㄱ in 국 is an unreleased k; connected speech can change the sound."],
+  ["ㄴ", "니은", "n", ["n"], "나무", "tree", "Combine ㄴ + ㅏ as 나. Final ㄴ remains a nasal n, as in 산."],
+  ["ㄷ", "디귿", "d before a vowel; unreleased t as a final", ["d", "t"], "다리", "leg; bridge", "Combine ㄷ + ㅏ as 다. Final ㄷ is an unreleased t, as in 곧."],
+  ["ㄹ", "리을", "light r between vowels; l as a final", ["r", "l"], "라디오", "radio", "Combine ㄹ + ㅏ as 라. Final ㄹ is l, as in 달; ㄹㄹ commonly sounds like a longer l."],
+  ["ㅁ", "미음", "m", ["m"], "모자", "hat", "Combine ㅁ + ㅗ as 모. Final ㅁ remains a nasal m, as in 밤."],
+  ["ㅂ", "비읍", "b before a vowel; unreleased p as a final", ["b", "p"], "바다", "sea", "Combine ㅂ + ㅏ as 바. Final ㅂ is an unreleased p, as in 밥."],
+  ["ㅅ", "시옷", "s; sh-like before i or a y-vowel", ["s", "sh"], "사과", "apple", "Combine ㅅ + ㅏ as 사. Final ㅅ alone is an unreleased t, as in 옷; the sound changes before a vowel."],
+  ["ㅇ", "이응", "silent initially; ng as a final", ["silent", "ng", "no sound"], "우유", "milk", "Initial ㅇ fills the consonant slot without a sound, as in 아. Final ㅇ is ng, as in 강."],
+  ["ㅈ", "지읒", "j", ["j"], "지도", "map", "Combine ㅈ + ㅣ as 지. Final ㅈ alone is an unreleased t, as in 낮."],
+  ["ㅊ", "치읓", "aspirated ch", ["ch"], "차", "tea; car", "Combine ㅊ + ㅏ as 차 with a puff of air. Final ㅊ alone is an unreleased t, as in 꽃."],
+  ["ㅋ", "키읔", "aspirated k", ["k", "kh"], "코", "nose", "Combine ㅋ + ㅗ as 코 with a puff of air. Final ㅋ is an unreleased k, as in 부엌."],
+  ["ㅌ", "티읕", "aspirated t", ["t", "th"], "토끼", "rabbit", "Combine ㅌ + ㅗ as 토 with a puff of air. Final ㅌ alone is an unreleased t, as in 밭."],
+  ["ㅍ", "피읖", "aspirated p", ["p", "ph"], "포도", "grape", "Combine ㅍ + ㅗ as 포 with a puff of air. Final ㅍ is an unreleased p, as in 앞."],
+  ["ㅎ", "히읗", "h", ["h"], "하늘", "sky", "Combine ㅎ + ㅏ as 하. Final ㅎ often affects a neighboring consonant or disappears before a vowel."],
+];
+const hangulTense: HangulRow[] = [
+  ["ㄲ", "쌍기역", "tense kk", ["kk"], "꼬리", "tail", "ㄲ is tense, with no strong puff of air. Combine ㄲ + ㅗ as 꼬; final ㄲ is an unreleased k, as in 밖."],
+  ["ㄸ", "쌍디귿", "tense tt", ["tt"], "딸", "daughter", "ㄸ is tense rather than aspirated. Combine ㄸ + ㅏ + ㄹ as 딸. ㄸ is not a final consonant in standard syllable spelling."],
+  ["ㅃ", "쌍비읍", "tense pp", ["pp"], "빵", "bread", "ㅃ is tense rather than aspirated. Combine ㅃ + ㅏ + ㅇ as 빵. ㅃ is not a final consonant in standard syllable spelling."],
+  ["ㅆ", "쌍시옷", "tense ss", ["ss"], "쌀", "rice (uncooked)", "Combine ㅆ + ㅏ + ㄹ as 쌀. Final ㅆ alone is an unreleased t, as in 있다 before a consonant."],
+  ["ㅉ", "쌍지읒", "tense jj", ["jj"], "짜다", "to be salty", "ㅉ is tense rather than aspirated. Combine ㅉ + ㅏ as 짜. ㅉ is not a final consonant in standard syllable spelling."],
+];
+const hangulVowels: HangulRow[] = [
+  ["ㅏ", "아", "a", ["a", "ah"], "아기", "baby", "Write the vertical vowel to the right of the initial consonant: ㅇ + ㅏ = 아. Initial ㅇ is silent."],
+  ["ㅑ", "야", "ya", ["ya", "yah"], "야구", "baseball", "The extra short stroke adds a y-glide: ㅇ + ㅑ = 야. Audio is the example syllable 야."],
+  ["ㅓ", "어", "eo; open unrounded vowel", ["eo"], "어머니", "mother", "Write ㅓ to the right of the initial: ㅇ + ㅓ = 어. Romanized eo represents one vowel, not two separate sounds."],
+  ["ㅕ", "여", "yeo", ["yeo"], "여름", "summer", "The extra short stroke adds a y-glide: ㅇ + ㅕ = 여. Romanized yeo is one syllable here."],
+  ["ㅗ", "오", "o", ["o", "oh"], "오이", "cucumber", "Write the horizontal vowel below the initial: ㅇ + ㅗ = 오. Keep the lips rounded."],
+  ["ㅛ", "요", "yo", ["yo", "yoh"], "요리", "cooking; dish", "Write ㅛ below the initial: ㅇ + ㅛ = 요. The two short strokes indicate a y-glide."],
+  ["ㅜ", "우", "u", ["u", "oo"], "우유", "milk", "Write ㅜ below the initial: ㅇ + ㅜ = 우. Round the lips; audio is the example syllable 우."],
+  ["ㅠ", "유", "yu", ["yu", "yoo"], "유리", "glass", "Write ㅠ below the initial: ㅇ + ㅠ = 유. The two short strokes indicate a y-glide."],
+  ["ㅡ", "으", "eu; unrounded close back vowel", ["eu"], "음악", "music", "Write ㅡ below the initial: ㅇ + ㅡ = 으. Keep the lips unrounded; eu does not mean English yoo."],
+  ["ㅣ", "이", "i", ["i", "ee"], "이름", "name", "Write ㅣ to the right of the initial: ㅇ + ㅣ = 이. Audio is the example syllable 이."],
+];
+const hangulCompound: HangulRow[] = [
+  ["ㅐ", "애", "ae", ["ae"], "애기", "baby (colloquial)", "ㅏ + ㅣ forms ㅐ: ㅇ + ㅐ = 애. Many modern speakers merge its sound with ㅔ, but the spelling stays distinct."],
+  ["ㅒ", "얘", "yae", ["yae"], "얘기", "story; talk", "ㅑ + ㅣ forms ㅒ: ㅇ + ㅒ = 얘. It may merge in speech with ㅖ; preserve the written form."],
+  ["ㅔ", "에", "e", ["e", "eh"], "에너지", "energy", "ㅓ + ㅣ forms ㅔ: ㅇ + ㅔ = 에. Modern ㅐ and ㅔ may sound alike; romanized answers retain the spelling distinction."],
+  ["ㅖ", "예", "ye", ["ye", "yeh"], "예술", "art", "ㅕ + ㅣ forms ㅖ: ㅇ + ㅖ = 예. The y-glide may weaken after some consonants."],
+  ["ㅘ", "와", "wa", ["wa", "wah"], "와인", "wine", "Combine horizontal ㅗ and vertical ㅏ: ㅇ + ㅘ = 와. The vowel wraps below and to the right of the initial."],
+  ["ㅙ", "왜", "wae", ["wae"], "왜", "why", "ㅗ + ㅐ forms ㅙ: ㅇ + ㅙ = 왜. It is often close to ㅚ and ㅞ in modern speech, but spellings differ."],
+  ["ㅚ", "외", "oe; commonly pronounced like we", ["oe", "we"], "외국", "foreign country", "ㅗ + ㅣ forms ㅚ: ㅇ + ㅚ = 외. Revised Romanization uses oe even when the modern pronunciation is we-like."],
+  ["ㅝ", "워", "wo", ["wo", "weo"], "원", "won (currency)", "ㅜ + ㅓ forms ㅝ: ㅇ + ㅝ = 워. The first part is a w-glide, not a separate syllable."],
+  ["ㅞ", "웨", "we", ["we", "weh"], "웨이터", "waiter", "ㅜ + ㅔ forms ㅞ: ㅇ + ㅞ = 웨. The sound can merge with ㅙ and ㅚ, but the written forms remain distinct."],
+  ["ㅟ", "위", "wi", ["wi", "wee"], "위", "above; stomach", "ㅜ + ㅣ forms ㅟ: ㅇ + ㅟ = 위. It is commonly pronounced with a w-glide in modern speech."],
+  ["ㅢ", "의", "ui; pronunciation varies by position", ["ui", "eui"], "의자", "chair", "ㅡ + ㅣ forms ㅢ: ㅇ + ㅢ = 의. It may sound like i after a consonant, and the possessive particle 의 may sound like e."],
+];
+function hangulEntries(rows: HangulRow[], group: string, audioKind: "letter-name" | "example-syllable"): AlphabetEntry[] {
+  return rows.map(([symbol, name, pronunciation, pronunciationAnswers, example, exampleTranslation, notes]) => ({
+    id: `ko-hangul-${symbol}`, language: "ko", group, symbol, name, pronunciation, pronunciationAnswers: [...pronunciationAnswers],
+    example, exampleTranslation, notes, audioKind, audioText: name, exampleReading: example,
+  }));
+}
 export const alphabetEntries: AlphabetEntry[] = [
   ...kanaEntries(basic, "Hiragana", "hiragana"), ...kanaEntries(basic, "Katakana", "katakana"),
   ...kanaEntries(voiced, "Dakuten · Hiragana", "hiragana"), ...kanaEntries(voiced, "Dakuten · Katakana", "katakana"),
@@ -51,4 +106,8 @@ export const alphabetEntries: AlphabetEntry[] = [
   ...spanish.map(([symbol, name, pronunciation, example, exampleTranslation, pronunciationAnswers], index) => ({ id: `es-letter-${index}`, language: "es" as const, group: "Alphabet", symbol, name, pronunciation, pronunciationAnswers: [...pronunciationAnswers], example, exampleTranslation, audioText: name })),
   ...greek.flatMap(([upper, lower, name, pronunciation, example, exampleTranslation, pronunciationAnswers], index) => ([{ id: `el-upper-${index}`, language: "el" as const, group: "Uppercase", symbol: upper, name, pronunciation, pronunciationAnswers: [...pronunciationAnswers], example, exampleTranslation, audioText: name }, { id: `el-lower-${index}`, language: "el" as const, group: "Lowercase", symbol: lower, name, pronunciation, pronunciationAnswers: [...pronunciationAnswers], example, exampleTranslation, audioText: name }])),
   { id: "el-final-sigma", language: "el", group: "Final sigma", symbol: "ς", name: "σίγμα τελικό", pronunciation: "s; lowercase sigma at the end of a word", pronunciationAnswers: ["s"], example: "κόσμος", exampleTranslation: "world", audioText: "σίγμα", exampleReading: "κόσμος" },
+  ...hangulEntries(hangulConsonants, "Basic consonants", "letter-name"),
+  ...hangulEntries(hangulVowels, "Basic vowels", "example-syllable"),
+  ...hangulEntries(hangulTense, "Tense consonants", "letter-name"),
+  ...hangulEntries(hangulCompound, "Compound vowels", "example-syllable"),
 ];

@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { answerQuiz, createQuizSession } from "@/domain/quiz";
-import type { GrammarPoint, QuizSession, VocabularyEntry } from "@/domain/models";
+import type { GrammarPoint, LanguageCode, QuizSession, VocabularyEntry, WordCareState, WordPair } from "@/domain/models";
 
 // Real embedded PostgreSQL runs the checked-in Cloud migrations. Auth functions/roles
 // reproduce Supabase's JWT identity boundary without a local Supabase stack or Docker.
@@ -96,7 +96,8 @@ describe("Cloud migrations and ownership", () => {
   it("enables RLS on every exposed domain table", async () => {
     await identity("postgres");
     const result = await db.query<{ relname: string; relrowsecurity: boolean }>("select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r'");
-    expect(result.rows).toHaveLength(26);
+    expect(result.rows).toHaveLength(29);
+    expect(result.rows.map(row => row.relname)).toEqual(expect.arrayContaining(["word_pairs", "quiz_preferences", "word_care_states"]));
     expect(result.rows.filter(row => !row.relrowsecurity)).toEqual([]);
   });
   it("isolates vocabulary and child records between two real database roles", async () => {
@@ -258,6 +259,158 @@ describe("immutable Grammar content and server-side grading", () => {
   });
 });
 
+async function languageWord(language: LanguageCode, written: string, translation: string, reading = "") {
+  await identity("authenticated");
+  const listId = crypto.randomUUID();
+  await db.query("insert into public.vocabulary_lists(id,user_id,language,name) values($1,$2,$3,'Mixed fixture')", [listId, userA, language]);
+  return word({ language, listId, word: written, translation, reading, acceptedAnswers: [] });
+}
+async function mixedSession(entries: VocabularyEntry[], changes: Partial<Parameters<typeof createQuizSession>[0]> = {}) {
+  await identity("postgres");
+  const today = await learningDay();
+  await db.query("update public.word_progress set due_date=$1::date", [today]);
+  await identity("service_role");
+  const draft = createQuizSession({ id: crypto.randomUUID(), userId: userA, language: "es", entries, type: "typing", languages: [...new Set(entries.map(entry => entry.language))], types: ["typing"], randomSeed: 28, learningDate: today, dueWordIds: entries.map(entry => entry.id), ...changes });
+  return rpc<QuizSession>("nl_create_quiz", [userA, draft]);
+}
+
+describe("mixed questions, word pairs, presentation and care in PostgreSQL", () => {
+  it("runs ordinary four-language questions without pairs and credits each tested word's own language", async () => {
+    const entries = [await languageWord("es", "perro", "dog"), await languageWord("ja", "猫", "cat", "ねこ"), await languageWord("ko", "물", "water", "mul"), await languageWord("el", "ψωμί", "bread")];
+    let session = await mixedSession(entries);
+    expect(await rpc("nl_word_pairs")).toEqual([]);
+    expect(session.questionTemplates.every(question => question.type === "typing" && question.targetLanguage === "en")).toBe(true);
+    const frozen = structuredClone(session.questionTemplates);
+    let first = true;
+    while (session.currentQuestion) {
+      const next = answerQuiz(session, first ? "wrong" : session.currentQuestion.acceptedAnswers[0], crypto.randomUUID());
+      first = false;
+      session = (await commit(session, next)).session;
+    }
+    expect(session.questionTemplates).toEqual(frozen);
+    expect(session.attempts.filter(attempt => attempt.kind === "retry")).toHaveLength(1);
+    expect((await db.query<{ participating_languages: string[] }>("select participating_languages from public.quiz_sessions where id=$1", [session.id])).rows[0].participating_languages.sort()).toEqual(["el", "es", "ja", "ko"]);
+    const activity = await db.query<{ language: string; word_language: string }>("select a.language,e.language as word_language from public.learning_activity a join public.quiz_attempts t on a.id='quiz:'||t.session_id||':'||t.id join public.vocabulary_entries e on e.id=t.word_id where t.session_id=$1", [session.id]);
+    expect(activity.rows).toHaveLength(session.attempts.length);
+    expect(activity.rows.every(row => row.language === row.word_language)).toBe(true);
+    const progress = await db.query<{ first_attempts: number; first_correct: number }>("select first_attempts,first_correct from public.word_progress order by word_id");
+    expect(progress.rows).toHaveLength(4);
+    expect(progress.rows.every(row => row.first_attempts === 1)).toBe(true);
+    expect(progress.rows.reduce((n, row) => n + row.first_correct, 0)).toBe(3);
+  });
+
+  it("keeps a one-way translation target in participating history while crediting only its tested source", async () => {
+    const source = await languageWord("es", "perro", "dog");
+    const target = await languageWord("ko", "개", "dog", "gae");
+    let session = await mixedSession([source, target], { types: ["translation-typing"], directions: [{ source: "es", target: "ko" }], presentation: "never" });
+    expect(session.entries.map(entry => entry.id)).toEqual([source.id]);
+    expect(session.questionTemplates[0]).toMatchObject({ wordId: source.id, contextWordId: target.id, sourceLanguage: "es", targetLanguage: "ko", acceptedAnswers: ["개"] });
+    expect(session.languages?.sort()).toEqual(["es", "ko"]);
+    expect((await db.query<{ participating_languages: string[] }>("select participating_languages from public.quiz_sessions where id=$1", [session.id])).rows[0].participating_languages.sort()).toEqual(["es", "ko"]);
+    await identity("authenticated");
+    await rpc("nl_save_vocabulary", [input({ language: "ko", listId: target.listId, word: "강아지", reading: "gangaji", translation: "puppy" }), target.id]);
+    session = (await commit(session, answerQuiz(session, "gae", "romanization-is-not-spelling"))).session;
+    expect(session.attempts[0].correct).toBe(false);
+    expect(session.currentQuestion?.acceptedAnswers).toEqual(["개"]);
+    session = (await commit(session, { ...session, status: "saved", version: session.version + 1 }, null)).session;
+    session = (await commit(session, { ...session, status: "active", version: session.version + 1 }, null)).session;
+    expect(session.presentation).toBe("never");
+    session = (await commit(session, answerQuiz(session, "개", "native-spelling"))).session;
+    expect(session.status).toBe("completed");
+    const progress = await db.query<{ word_id: string; first_attempts: number; errors: number }>("select word_id,first_attempts,errors from public.word_progress order by word_id");
+    expect(progress.rows.find(row => row.word_id === source.id)).toMatchObject({ first_attempts: 1, errors: 1 });
+    expect(progress.rows.find(row => row.word_id === target.id)).toMatchObject({ first_attempts: 0, errors: 0 });
+    expect((await db.query<{ language: string }>("select distinct language from public.learning_activity")).rows).toEqual([{ language: "es" }]);
+  });
+
+  it("grades translation MCQ IDs against frozen target choices and rejects altered templates and enabled configuration", async () => {
+    const source = await languageWord("es", "perro", "dog");
+    const target = await languageWord("ko", "개", "dog", "gae");
+    const distractor = await languageWord("ko", "고양이", "cat", "goyangi");
+    const session = await mixedSession([source, target, distractor], { type: "translation-mcq", types: ["translation-mcq"], directions: [{ source: "es", target: "ko" }] });
+    expect(session.currentQuestion?.correctChoiceId).toBe(target.id);
+    expect(session.currentQuestion?.choices.map(choice => choice.text).sort()).toEqual(["개", "고양이"]);
+    const forged = answerQuiz(session, distractor.id, "forged-mcq-grade");
+    forged.attempts[0].correct = true;
+    await expect(commit(session, forged)).rejects.toThrow("grade");
+    const options = answerQuiz(session, target.id, "altered-options");
+    options.questionTemplates[0].choices.reverse();
+    await expect(commit(session, options)).rejects.toThrow("immutable");
+    const configuration = { ...session, version: session.version + 1, status: "saved" as const, enabledTypes: ["typing" as const] };
+    await expect(commit(session, configuration, null)).rejects.toThrow("configuration is immutable");
+    const result = await commit(session, answerQuiz(session, target.id, "correct-mcq"));
+    expect(result.session.attempts[0]).toMatchObject({ wordId: source.id, answer: target.id, correct: true });
+    expect(result.session.questionTemplates).toEqual(session.questionTemplates);
+    expect(await commit(session, { ...result.session, attempts: [] }, "correct-mcq")).toEqual(result);
+  });
+
+  it("confirms and edits owned pairs, keeps deletion tombstones, and rejects cross-owner mutation", async () => {
+    const source = await languageWord("es", "perro", "dog");
+    const target = await languageWord("ko", "개", "dog");
+    const replacement = await languageWord("ko", "강아지", "puppy");
+    const suggestion = { sourceWordId: source.id, targetWordId: target.id, confidence: 0.5, warning: "Check the meaning." };
+    expect(await rpc<WordPair[]>("nl_suggest_word_pairs", [[suggestion]])).toMatchObject([{ status: "suggested", warning: "Check the meaning." }]);
+    const confirmed = await rpc<WordPair>("nl_save_word_pair", [source.id, target.id]);
+    expect(confirmed).toMatchObject({ status: "confirmed", confidence: 1, warning: null });
+    const edited = await rpc<WordPair>("nl_save_word_pair", [source.id, replacement.id, confirmed.id]);
+    expect(edited).toMatchObject({ id: confirmed.id, targetWordId: replacement.id, status: "confirmed" });
+    await rpc("nl_delete_word_pair", [edited.id]);
+    const repeated = { ...suggestion, targetWordId: replacement.id };
+    expect(await rpc<WordPair[]>("nl_suggest_word_pairs", [[repeated, { ...repeated, sourceWordId: replacement.id, targetWordId: source.id }]])).toMatchObject([{ id: edited.id, status: "deleted" }]);
+    await identity("authenticated", userB);
+    expect(await rpc("nl_word_pairs")).toEqual([]);
+    await expect(rpc("nl_save_word_pair", [source.id, replacement.id, edited.id])).rejects.toThrow("owned words");
+    await expect(rpc("nl_delete_word_pair", [edited.id])).rejects.toThrow("not found");
+    await expect(db.query("update public.word_pairs set status='confirmed'")).rejects.toThrow("permission denied");
+  });
+
+  it("isolates saved defaults and restores immutable session presentation after another preference change", async () => {
+    expect(await rpc("nl_quiz_preferences")).toEqual({ presentation: "always", vocabularyAutoAudio: false, alphabetAutoAudio: false });
+    await rpc("nl_update_quiz_preferences", [{ presentation: "never", vocabularyAutoAudio: true }]);
+    const entry = await word();
+    let session = await mixedSession([entry], { presentation: "never" });
+    await identity("authenticated");
+    await rpc("nl_update_quiz_preferences", [{ presentation: "incorrect" }]);
+    session = (await commit(session, { ...session, version: session.version + 1, status: "saved" }, null)).session;
+    session = (await commit(session, { ...session, version: session.version + 1, status: "active" }, null)).session;
+    expect(session.presentation).toBe("never");
+    await expect(commit(session, { ...session, version: session.version + 1, status: "saved", presentation: "always" }, null)).rejects.toThrow("presentation preference is immutable");
+    await identity("authenticated", userB);
+    expect(await rpc("nl_quiz_preferences")).toEqual({ presentation: "always", vocabularyAutoAudio: false, alphabetAutoAudio: false });
+    expect((await db.query("select * from public.quiz_sessions")).rows).toEqual([]);
+  });
+
+  it("reactivates automatic care only for a new incorrect INSERT, preserving manual care and old error evidence", async () => {
+    const entry = await word();
+    await rpc("nl_set_word_care", [entry.id, "add"]);
+    let session = await mixedSession([entry]);
+    session = (await commit(session, answerQuiz(session, "coffee", "manual-correct"))).session;
+    await identity("authenticated");
+    expect(await rpc<WordCareState[]>("nl_word_care", ["es"])).toMatchObject([{ manualCare: true }]);
+    session = await mixedSession([entry]);
+    session = (await commit(session, answerQuiz(session, "wrong", "old-error"))).session;
+    await identity("authenticated");
+    await rpc("nl_set_word_care", [entry.id, "remove"]);
+    await commit(session, { ...session, attempts: [] }, "old-error");
+    session = (await commit(session, { ...session, version: session.version + 1, status: "ended", currentQuestion: null }, null)).session;
+    await identity("authenticated");
+    expect(await rpc<WordCareState[]>("nl_word_care", ["es"])).toMatchObject([{ manualCare: false, automaticSuppressed: true }]);
+    const historical = await db.query<{ errors: number; first_attempts: number }>("select errors,first_attempts from public.word_progress where word_id=$1", [entry.id]);
+    expect(historical.rows[0]).toMatchObject({ errors: 1, first_attempts: 2 });
+    session = await mixedSession([entry]);
+    session = (await commit(session, answerQuiz(session, "new wrong", "new-error"))).session;
+    await identity("authenticated");
+    expect(await rpc<WordCareState[]>("nl_word_care", ["es"])).toMatchObject([{ automaticSuppressed: false }]);
+    await rpc("nl_set_word_care", [entry.id, "remove"]);
+    await commit(session, { ...session, attempts: [] }, "new-error");
+    await identity("authenticated");
+    expect(await rpc<WordCareState[]>("nl_word_care", ["es"])).toMatchObject([{ automaticSuppressed: true }]);
+    await identity("authenticated", userB);
+    await expect(rpc("nl_set_word_care", [entry.id, "add"])).rejects.toThrow("unavailable");
+    expect(await rpc("nl_word_care", ["es"])).toEqual([]);
+  });
+});
+
 describe("atomic quiz CAS, replay, and SRS settlement", () => {
   it("freezes selected entries across vocabulary edits and rejects client quiz access", async () => {
     const entry = await word(); const session = await createSession([entry]);
@@ -321,6 +474,21 @@ describe("atomic quiz CAS, replay, and SRS settlement", () => {
     session = (await commit(session, { ...session, version: session.version + 1, status: "ended", currentQuestion: null }, null)).session;
     expect(session.settled).toBe(true);
     expect((await db.query("select * from public.review_settlements")).rows).toHaveLength(1);
+  });
+  it("remembers direct API session presentation without overwriting audio preferences or legacy defaults", async () => {
+    const entry = await word();
+    await rpc("nl_update_quiz_preferences", [{ presentation: "never", vocabularyAutoAudio: true, alphabetAutoAudio: true }]);
+    await identity("postgres"); const day = await learningDay();
+    const state = createQuizSession({ id: crypto.randomUUID(), userId: userA, language: "es", entries: [entry], type: "typing", randomSeed: 42, learningDate: day, presentation: "incorrect" });
+    await identity("service_role");
+    expect(await rpc("nl_create_quiz", [userA, state])).toEqual(state);
+    await identity("authenticated");
+    expect(await rpc("nl_quiz_preferences")).toEqual({ presentation: "incorrect", vocabularyAutoAudio: true, alphabetAutoAudio: true });
+    await createSession([entry]);
+    await identity("authenticated");
+    expect(await rpc("nl_quiz_preferences")).toEqual({ presentation: "incorrect", vocabularyAutoAudio: true, alphabetAutoAudio: true });
+    await identity("authenticated", userB);
+    expect(await rpc("nl_quiz_preferences")).toEqual({ presentation: "always", vocabularyAutoAudio: false, alphabetAutoAudio: false });
   });
   it("early practice keeps the due date and same-day due reviews cannot advance twice", async () => {
     const entry = await word();

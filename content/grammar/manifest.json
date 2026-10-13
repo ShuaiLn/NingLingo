@@ -72,6 +72,13 @@
       "version": "Poulopoulou 2015; ISBN 978-960-603-129-8; DOI 10.57713/kallipos-583",
       "license": "CC-BY-NC-SA-3.0-GR (reference source only)",
       "attribution": "Maria Poulopoulou, Kallipos Open Academic Editions (2015). Topic reference only: no textbook prose, examples, exercises, audio, or illustrations are redistributed. The textbook’s reviewer is not a reviewer of NingLingo content."
+    },
+    "korean": {
+      "title": "National Institute of Korean Language: Korean-English Learners’ Dictionary",
+      "url": "https://krdict.korean.go.kr/eng/mainAction?nation=eng",
+      "version": "Reference consulted 2026-10-12",
+      "license": "Reference only; source copyright retained by National Institute of Korean Language",
+      "attribution": "Official grammar and vocabulary reference only. Instructional material is original AI-authored text; no dictionary definitions, examples, audio, or images are redistributed. NIKL did not review this course."
     }
   },
   "datasets": [
@@ -95,6 +102,15 @@
       "examples": 180,
       "exercises": 300,
       "sha256": "422efa064cb8aae5ed36585791705d8472a55f937a07d9cb71308226726950d6"
+    },
+    {
+      "language": "ko",
+      "lessons": 60,
+      "examples": 180,
+      "exercises": 300,
+      "sha256": "f7182b4004a4180a30f3c3898d65c77d4ac1edee2901764284912dc5cae5c557",
+      "status": "published-ai",
+      "humanReview": "pending"
     }
   ]
 }

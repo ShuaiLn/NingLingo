@@ -2,7 +2,19 @@
 
 ## Current production release
 
-The project owner confirmed human review of all 240 lessons, approved every lesson as correct, and requested production publication. The release records the supplied reviewer signature **ning lu** and review date **2026-10-11** in [`content/grammar/releases/2026-10-11-v2.json`](../content/grammar/releases/2026-10-11-v2.json). Every lesson is `published`, has `contentVersion: 2`, and retains its original explanation, examples, exercises, and source attribution. The version 1 draft files and manifest remain unchanged.
+The project owner confirmed human review of all 240 lessons, approved every lesson as correct, and requested production publication. The release records the supplied reviewer signature **ning lu** and review date **2026-10-11** in [`content/grammar/releases/2026-10-11-v2.json`](../content/grammar/releases/2026-10-11-v2.json). Every lesson is `published`, has `contentVersion: 2`, and retains its original explanation, examples, exercises, and source attribution. The version 1 draft files and their manifest hashes remain unchanged.
+
+## Korean AI course
+
+The additional 60 beginner Korean lessons use the independent `published-ai` status. They are immediately available for study and display **AI-authored; not human-reviewed · AI 编写，未经人工审核**. Each lesson has an English explanation, formation, three original Hangul examples with English translations, and five answer-keyed exercises. No human review record is created for these lessons. The original 240-lesson release and its historical versions and review records remain intact; older drafts remain hidden in cloud learner repositories.
+
+The syllabus and original explanations are in [`content/grammar/authoring/ko.mjs`](../content/grammar/authoring/ko.mjs), with deterministic generated output in [`content/grammar/generated/ko.json`](../content/grammar/generated/ko.json). [`scripts/grammar-build-ko.mjs`](../scripts/grammar-build-ko.mjs) rebuilds only Korean and updates its manifest entry without rewriting the original three language files. The [National Institute of Korean Language’s Korean-English Learners’ Dictionary](https://krdict.korean.go.kr/eng/mainAction?nation=eng) is a reference; no dictionary prose, examples, audio, or illustrations are copied. The new instructional material is original AI-authored content licensed CC BY-SA 4.0.
+
+The existing 60 Korean lessons were published to the configured production Supabase project on **2026-10-12 (America/Tijuana)**. All are `published-ai`, version 1, readable by normal authenticated users, and retain their original content and answer keys. There are exactly 180 translated examples, 300 exercises and **zero Korean human-review records**. The production repository preserves the authored Korean syllabus order while retaining live content and the original ordering of other languages.
+
+Use `npm run grammar:publish:ko` for the scoped Korean-only administrative import. It validates the pinned generated dataset and imports exactly its sixty Korean manifests through the existing RPC; it never submits Japanese, Spanish or Greek content. An identical replay returned **0 imported / 60 unchanged**, with identical normalized child-record hashes. `npm run grammar:verify:ko` verifies every Korean lesson using a disposable authenticated account and checks original-language content/version/review integrity. Add `-- --browser` after a production build for a two-device browser smoke test of listing order and first/middle/last lessons. Verification output and redacted logs stay under ignored `.local-preview/`; disposable accounts and their owned data are deleted.
+
+The publication passed 379 checks; a subsequent verification with browser smoke passed 380 checks, including 20 browser checks. Before/after hashes preserved all original 240 points, 480 versions, 1,440 examples, 2,400 exercises, 1,120 source records and 240 review records. No migration was rerun and no unrelated user data was changed. Server-side grammar grading, the 80% completion threshold, owner-isolated progress, and immutable content versions apply to Korean as well. A later genuine human review should use a new immutable version and the existing reviewed-file workflow.
 
 Validate or publish this exact release from the repository root:
 
@@ -40,7 +52,7 @@ node --experimental-strip-types scripts/grammar-validate.mjs
 node --experimental-strip-types scripts/grammar-import.mjs --validate-only
 ```
 
-The build is deterministic: no wall-clock timestamp, unseeded random choices, network request, or machine translation is used. Choice positions are derived from SHA-256 of the stable exercise ID. The validator checks language counts, required fields, statuses, stable/unique IDs and titles, at least three nonduplicate examples, translations, five exercises, two to four distinct Unicode-normalized choices, one valid answer index, explanations, source/license versions, and honest human-review requirements. The import additionally verifies generated-file hashes against the manifest and refuses to publish the initial AI dataset.
+The build is deterministic: no wall-clock timestamp, unseeded random choices, network request, or machine translation is used. Choice positions are derived from SHA-256 of the stable exercise ID. The validator checks 300 lessons (the 240 original drafts and 60 Korean AI lessons), required fields, statuses, stable/unique IDs and titles, at least three nonduplicate examples, translations, five exercises, two to four distinct Unicode-normalized choices, one valid answer index, explanations, source/license versions, and honest human-review requirements. The import additionally verifies generated-file hashes against the manifest. Original drafts remain drafts; only Korean uses the independent, explicitly disclosed AI publication state.
 
 ## Import and versioning
 
@@ -52,7 +64,7 @@ node --experimental-strip-types scripts/grammar-import.mjs
 
 This administrative command reads `.env.local` locally and uses the existing server-only `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) and `NEXT_PUBLIC_SUPABASE_URL`. It never prints credentials, runs in browser code, or substitutes an anonymous/public key for administrative authorization. It calls the service-role-only `nl_import_grammar(p_points)` transaction; content, examples, exercises, and sources persist in normalized relational tables. Reimporting an identical version is idempotent. A different payload for an existing version must be rejected, preserving content history.
 
-Ordinary learner repositories read **published** content only. Empty published content should explain that review is pending rather than falling back to development sample lessons. Drafts remain available to the administrative pipeline and repository audit tests.
+Ordinary cloud learner repositories read **published** human-reviewed content and independently labeled **published-ai** content. Drafts and review-only versions stay hidden. Empty published content does not fall back to development samples. Drafts remain available to the administrative pipeline and repository audit tests.
 
 For the first release, a qualified human must review each lesson against its cited reference, correct language/naturalness/translation and distractor ambiguity, record the actual reviewer and review date, and document modifications. Publish only after the required lesson checks and genuine review records exist. Do not copy a source textbook reviewer into NingLingo metadata or label automated validation as human review. Revised content uses a new immutable content version; learner progress remains tied to the version they actually completed.
 

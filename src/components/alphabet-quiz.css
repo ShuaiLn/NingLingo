@@ -1,4 +1,14 @@
 .alphabet-quiz-intro { margin: 0 0 20px; }
+.alphabet-auto-audio { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 13px; }
+.alphabet-replay { display: flex; justify-content: center; align-items: center; gap: 8px; margin: 12px; }
+.alphabet-mcq-form { max-width: 540px; margin: 20px auto; }
+.alphabet-mcq-options { border: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.alphabet-mcq-option { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 16px; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.alphabet-mcq-option.selected { border-color: var(--accent-dark); background: var(--accent-pale, #fff0f5); }
+.alphabet-mcq-option:focus-within { outline: 2px solid var(--accent-dark); outline-offset: 2px; }
+.alphabet-attempt-history { text-align: left; margin: 20px auto; max-width: 640px; }
+.alphabet-attempt { padding: 14px; margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; }
+.alphabet-attempt p { margin: 7px 0; }
 .alphabet-resume-panel { margin-bottom: 24px; }
 .alphabet-quiz-card .alphabet-quiz-symbol { font-size: clamp(52px, 9vw, 82px); }
 .alphabet-hint-toggles { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 24px; }

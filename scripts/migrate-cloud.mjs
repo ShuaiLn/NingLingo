@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import nextEnv from "@next/env";
+import { migrationPreflight } from "./migration-state.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -27,27 +28,28 @@ async function main() {
   const hostname = new URL(url).hostname;
   const ref = hostname.endsWith(".supabase.co") ? hostname.split(".")[0] : process.env.SUPABASE_PROJECT_REF;
   if (!ref || !/^[a-z0-9]+$/.test(ref)) throw new Error("Cannot determine the Supabase Cloud project reference; configure SUPABASE_PROJECT_REF for a custom domain.");
-  async function query(sql) {
+  async function query(sql, readOnly = true) {
     const response = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query: sql, read_only: false }), signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({ query: sql, read_only: readOnly }), signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(`Supabase Management API rejected SQL application (HTTP ${response.status}). No credentials or SQL response are printed.`);
     return response.json();
   }
-  await query("create schema if not exists ninglingo_internal; revoke all on schema ninglingo_internal from public,anon,authenticated; create table if not exists ninglingo_internal.applied_migrations(name text primary key,checksum text not null,applied_at timestamptz not null default now());");
-  const history = await query("select name,checksum from ninglingo_internal.applied_migrations order by name;");
-  if (!Array.isArray(history)) throw new Error("Unexpected migration history response; stopped before applying domain migrations.");
-  const known = new Map(migrations.map(migration => [migration.name, migration]));
-  for (const row of history) {
-    if (!known.has(row.name) || known.get(row.name).checksum !== row.checksum) throw new Error(`Migration history mismatch for ${row.name}; do not rewrite applied migrations.`);
+  // Inspect both schema and ledger without issuing CREATE/ALTER first. An empty
+  // or incomplete checksum table is not evidence that production DDL is absent.
+  const inspected = await query("select coalesce((select jsonb_agg(tablename order by tablename) from pg_catalog.pg_tables where schemaname='public'),'[]'::jsonb) as tables, to_regclass('ninglingo_internal.applied_migrations') is not null as history_exists;");
+  if (!Array.isArray(inspected) || inspected.length !== 1) throw new Error("Unexpected cloud catalog response; stopped before DDL.");
+  const catalog = { tables: inspected[0].tables, historyExists: inspected[0].history_exists };
+  const history = catalog.historyExists ? await query("select name,checksum from ninglingo_internal.applied_migrations order by name;") : [];
+  const preflight = migrationPreflight(migrations, history, catalog);
+  console.log(`Inspected cloud schema and checksum history before DDL: ${catalog.tables.length} public tables, ${history.length} recorded migrations, ${preflight.pending.length} pending.`);
+  if (preflight.initializeLedger) {
+    await query("create schema if not exists ninglingo_internal; revoke all on schema ninglingo_internal from public,anon,authenticated; create table ninglingo_internal.applied_migrations(name text primary key,checksum text not null,applied_at timestamptz not null default now());", false);
   }
-  const applied = new Set(history.map(row => row.name));
-  if (history.length && migrations.some(migration => !applied.has(migration.name) && migration.name < history.at(-1).name)) throw new Error("An earlier migration is missing from cloud history; stopped to prevent out-of-order application.");
-  for (const migration of migrations) {
-    if (applied.has(migration.name)) continue;
+  for (const migration of preflight.pending) {
     // DDL + checksum commit together; a failure leaves the migration unapplied.
-    await query(`begin; select pg_advisory_xact_lock(hashtextextended('ninglingo:migrations',0)); ${migration.sql}\ninsert into ninglingo_internal.applied_migrations(name,checksum) values(${quote(migration.name)},${quote(migration.checksum)}); commit;`);
+    await query(`begin; select pg_advisory_xact_lock(hashtextextended('ninglingo:migrations',0)); ${migration.sql}\ninsert into ninglingo_internal.applied_migrations(name,checksum) values(${quote(migration.name)},${quote(migration.checksum)}); commit;`, false);
     console.log(`Applied ${migration.name}`);
   }
   const verification = await query("select count(*)::integer as applied from ninglingo_internal.applied_migrations;");

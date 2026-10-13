@@ -12,6 +12,8 @@ import { normalizeVocabularyDetails, vocabularyExamples } from "@/domain/vocabul
 import { useAppData } from "./app-provider";
 import { AudioButton } from "./audio-button";
 import { WordText } from "./word-text";
+import { WordCare } from "./word-care";
+import { WordDetails } from "./word-details";
 import "./content.css";
 
 type WordForm = Omit<VocabularyInput, "acceptedAnswers" | "language" | "examples" | "relatedWords"> & { answersText: string; examples: VocabularyExample[]; relatedWords: RelatedWord[] };
@@ -27,7 +29,8 @@ function downloadCsvTemplate() {
 }
 
 export function VocabularyPage({ language }: { language: LanguageCode }) {
-  const { repos, entries, lists, ready, error } = useAppData(language);
+  const { repos, entries, lists, ready, error, wordProgress, careStates } = useAppData(language);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [query, setQuery] = useState(""), [category, setCategory] = useState(""), [listId, setListId] = useState("");
   const [selected, setSelected] = useState<string[]>([]), [mode, setMode] = useState<"hiragana" | "katakana">("katakana");
   const [form, setForm] = useState<WordForm | null>(null), [editingId, setEditingId] = useState<string | undefined>();
@@ -112,6 +115,7 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
   return <div className="vocabulary-page">
     <div className="page-heading"><div><span className="eyebrow">Your personal word collection</span><h1>Vocabulary</h1><p className="muted">Keep useful words, their meanings, and the answers you want to practice.</p></div><button className="button" disabled={!ready || busy} onClick={() => { setEditingId(undefined); setFirstListName("My vocabulary"); setForm({ ...blankForm(), listId: defaultList }); }}>+ Add word</button></div>
     {(message || error) && <p className="notice" role="status">{message || error}</p>}
+    {detailId && entries.some(entry => entry.id === detailId) && <section className="card" aria-label="Word details" style={{ marginBottom: 20 }}><div className="section-heading"><h2>Word details</h2><button className="button secondary" onClick={() => setDetailId(null)}>Close details</button></div><WordDetails entry={entries.find(entry => entry.id === detailId)!} progress={wordProgress.find(item => item.wordId === detailId)} care={careStates.find(item => item.wordId === detailId)} /></section>}
     <section className="card" style={{ marginBottom: 20 }} aria-label="Vocabulary lists">
       <div className="section-heading"><h2>Your lists</h2><span className="muted">{entries.length} words · {lists.length} lists</span></div>
       <div className="toolbar"><label className="field">List<select value={listId} onChange={(event) => { setListId(event.target.value); setSelected([]); }}><option value="">All lists</option>{lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
@@ -161,7 +165,7 @@ export function VocabularyPage({ language }: { language: LanguageCode }) {
         </div>)}
           {(entry.relatedWords?.length ?? 0) > 0 && <details><summary className="muted">Related words ({entry.relatedWords!.length})</summary>{entry.relatedWords!.map(related => <div key={related.id} style={{ margin: "8px 0" }}><span className="badge">{relationLabel(related.relationType)}</span><div className="word-with-audio"><WordText entry={{ word: related.word, reading: related.reading, language }} mode={mode} /><AudioButton text={related.word} reading={related.reading} language={language} /></div>{related.translation && <small className="muted" style={{ display: "block" }}>{related.translation}</small>}{language !== "ja" && related.reading && <small className="muted" style={{ display: "block" }}>Pronunciation: {related.reading}</small>}</div>)}</details>}
           {entry.notes && <details><summary className="muted">Notes</summary><p>{entry.notes}</p></details>}</td>
-        <td><button className="button secondary" onClick={() => edit(entry)}>Edit</button></td>
+        <td><button className="button secondary" onClick={() => edit(entry)}>Edit</button><button className="button secondary" onClick={() => setDetailId(entry.id)}>Details</button><WordCare wordId={entry.id} progress={wordProgress.find(item => item.wordId === entry.id)} state={careStates.find(item => item.wordId === entry.id)} /></td>
       </tr>)}</tbody></table></div>}
     </section>
     {preview && <section className="card" style={{ marginTop: 20 }} aria-label="CSV import preview"><div className="section-heading"><h2>CSV import preview</h2><button className="button secondary" disabled={busy} onClick={() => { previewGeneration.current++; setPreview(null); }}>Close preview</button></div>

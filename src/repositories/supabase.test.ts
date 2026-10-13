@@ -5,6 +5,7 @@ import { createQuizSession } from "@/domain/quiz";
 import { createAlphabetQuizSession } from "@/domain/alphabet-quiz";
 import { initialWordProgress } from "@/domain/review";
 import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
+import koreanGrammar from "../../content/grammar/generated/ko.json";
 
 const mocks = vi.hoisted(() => ({ privileged: { rpc: vi.fn(), from: vi.fn() }, translate: vi.fn() }));
 vi.mock("server-only", () => ({}));
@@ -17,7 +18,7 @@ function query(result: DatabaseResult) {
   let bounds: [number, number] | null = null;
   const rangedResult = () => bounds && Array.isArray(result.data) ? { ...result, data: result.data.slice(bounds[0], bounds[1] + 1) } : result;
   const builder = {
-    select: vi.fn(() => builder), eq: vi.fn(() => builder), order: vi.fn(() => builder),
+    select: vi.fn(() => builder), eq: vi.fn(() => builder), or: vi.fn(() => builder), order: vi.fn(() => builder),
     range: vi.fn((start: number, end: number) => { bounds = [start, end]; return builder; }),
     insert: vi.fn(() => builder), update: vi.fn(() => builder), delete: vi.fn(() => builder), in: vi.fn(() => builder), upsert: vi.fn(() => builder),
     single: vi.fn(async () => result),
@@ -61,6 +62,32 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("Supabase production repository boundary", () => {
+  it("restores the authored Korean syllabus order without replacing live published content", async () => {
+    const h = harness();
+    const cloud = [...koreanGrammar].reverse().map(point => ({ ...point, explanation: `Live ${point.id}` }));
+    h.rpc.mockResolvedValueOnce({ data: cloud as never, error: null });
+    const points = await h.repos.grammar.getPoints("ko");
+    expect(points.map(point => point.id)).toEqual(koreanGrammar.map(point => point.id));
+    expect(points[0].explanation).toBe(`Live ${koreanGrammar[0].id}`);
+    expect(cloud[0].id).toBe(koreanGrammar.at(-1)!.id);
+    expect(h.rpc).toHaveBeenCalledExactlyOnceWith("nl_grammar_points", { p_language: "ko" });
+  });
+  it("keeps hidden Korean lessons absent and future IDs stable after known syllabus lessons", async () => {
+    const h = harness();
+    h.rpc.mockResolvedValueOnce({ data: [] as never, error: null });
+    expect(await h.repos.grammar.getPoints("ko")).toEqual([]);
+    const future = [{ ...koreanGrammar[0], id: "ko-future-b" }, { ...koreanGrammar[0], id: "ko-future-a" }];
+    h.rpc.mockResolvedValueOnce({ data: [future[0], koreanGrammar[1], future[1]] as never, error: null });
+    expect((await h.repos.grammar.getPoints("ko")).map(point => point.id)).toEqual([koreanGrammar[1].id, "ko-future-b", "ko-future-a"]);
+  });
+  it("preserves existing Japanese, Spanish and Greek repository ordering", async () => {
+    const h = harness();
+    for (const language of ["ja", "es", "el"] as const) {
+      const points = [{ ...koreanGrammar[0], id: `${language}-z`, language }, { ...koreanGrammar[0], id: `${language}-a`, language }];
+      h.rpc.mockResolvedValueOnce({ data: points as never, error: null });
+      expect(await h.repos.grammar.getPoints(language)).toBe(points);
+    }
+  });
   it("creates Alphabet snapshots exclusively from current static content via a service-only RPC", async () => {
     const h = harness();
     mocks.privileged.rpc.mockImplementationOnce(async (_name: string, args: Record<string, unknown>) => ({ data: args.p_state, error: null }));

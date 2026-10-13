@@ -10,6 +10,26 @@ afterEach(() => vi.unstubAllGlobals());
 const letter = (language: LanguageCode, symbol: string) => alphabetEntries.find(item => item.language === language && item.symbol.split(" ").includes(symbol))!;
 
 describe("independent, persisted Alphabet quiz repositories", () => {
+  it("restores identical MCQ options across devices, retries and completed history", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const first = createLocalRepositories(adapter);
+    const before = await first.progress.getWords("ko");
+    const session = await first.alphabetQuiz.create({ language: "ko", itemIds: [letter("ko", "ㄱ").id], mode: "mcq", direction: "pronunciation-to-character", randomSeed: 22 });
+    const question = session.currentQuestion!;
+    const wrongId = question.options!.find(option => option.id !== question.correctOptionId)!.id;
+    const incorrect = await first.alphabetQuiz.answer(session.id, { answer: wrongId, version: session.version, submissionId: "wrong" });
+    const saved = await first.alphabetQuiz.saveAndExit(session.id, incorrect.version);
+    const second = createLocalRepositories(adapter);
+    const restored = await second.alphabetQuiz.resume(saved.id, saved.version);
+    expect(restored.currentQuestion).toMatchObject({ direction: question.direction, options: question.options, correctOptionId: question.correctOptionId });
+    const completed = await second.alphabetQuiz.answer(restored.id, { answer: question.correctOptionId!, version: restored.version, submissionId: "correct" });
+    const history = await createLocalRepositories(adapter).alphabetQuiz.getSession(completed.id);
+    expect(history).toEqual(completed);
+    expect(history.questions.every(item => JSON.stringify(item.options) === JSON.stringify(question.options))).toBe(true);
+    expect(history.testedItemIds).toEqual([question.itemId]);
+    expect(history.attempts.map(item => [item.kind, item.correct])).toEqual([["initial", false], ["retry", true]]);
+    expect(await second.progress.getWords("ko")).toEqual(before);
+  });
   it.each([
     ["ja", "あ", "AH", true], ["ja", "あ", "i", false],
     ["es", "B", "b", true], ["es", "B", "be", false], ["es", "H", "silent", true],

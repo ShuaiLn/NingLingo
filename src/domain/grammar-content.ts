@@ -11,31 +11,32 @@ const exercise = z.object({ id: identifier, prompt: nonblank, choices: z.array(n
   if (new Set(entry.choices.map(normalized)).size !== entry.choices.length) context.addIssue({ code: "custom", path: ["choices"], message: "Exercise choices must be distinct after Unicode normalization." });
 });
 export const grammarProductionPointSchema = z.object({
-  id: identifier, language: z.enum(["ja", "es", "el"]), title: nonblank, level: nonblank, category: nonblank,
+  id: identifier, language: z.enum(["ja", "es", "el", "ko"]), title: nonblank, level: nonblank, category: nonblank,
   explanation: z.string().trim().min(20), formation: nonblank,
   examples: z.array(example).min(3), exercises: z.array(exercise).min(5),
-  status: z.enum(["draft", "reviewed", "published"]), sources: z.array(source).min(1),
+  status: z.enum(["draft", "reviewed", "published", "published-ai"]), sources: z.array(source).min(1),
   reviewer: z.object({ name: nonblank, date: z.iso.date() }).nullable(), contentVersion: z.number().int().positive(),
   modificationNotes: nonblank, developmentSeed: z.literal(false),
 }).superRefine((point, context) => {
   if (!point.id.startsWith(`${point.language}-`)) context.addIssue({ code: "custom", path: ["id"], message: "Lesson ID must have its stable language prefix." });
-  if (point.status !== "draft" && !point.reviewer) context.addIssue({ code: "custom", path: ["reviewer"], message: "Reviewed and published lessons require a real human review record." });
+  if (["reviewed", "published"].includes(point.status) && !point.reviewer) context.addIssue({ code: "custom", path: ["reviewer"], message: "Reviewed and published lessons require a real human review record." });
+  if (point.status === "published-ai" && (point.reviewer !== null || !point.modificationNotes.includes("AI-authored; not human-reviewed"))) context.addIssue({ code: "custom", path: ["reviewer"], message: "AI publication must have no human reviewer and disclose AI-authored; not human-reviewed provenance." });
   if (new Set(point.examples.map(entry => normalized(entry.text))).size !== point.examples.length) context.addIssue({ code: "custom", path: ["examples"], message: "A lesson must not repeat the same example." });
   const ids = [...point.examples, ...point.exercises].map(entry => entry.id);
   if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", message: "Example and exercise IDs must be unique within a version." });
 });
 
-export interface GrammarDatasetValidation { points: GrammarPoint[]; errors: string[]; counts: Record<LanguageCode, number> }
-export function validateGrammarDataset(value: unknown): GrammarDatasetValidation {
+export interface GrammarDatasetValidation { points: GrammarPoint[]; errors: string[]; counts: Partial<Record<LanguageCode, number>> }
+export function validateGrammarDataset(value: unknown, expected: Partial<Record<LanguageCode, number>> = { ja: 100, es: 80, el: 60 }): GrammarDatasetValidation {
   const parsed = z.array(grammarProductionPointSchema).safeParse(value);
-  const counts: Record<LanguageCode, number> = { ja: 0, es: 0, el: 0 };
+  const counts: Partial<Record<LanguageCode, number>> = Object.fromEntries(Object.keys(expected).map(language => [language, 0]));
   if (!parsed.success) return { points: [], counts, errors: parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`) };
   const errors: string[] = [];
   const ids = new Set<string>();
   const titles = new Set<string>();
   const childIds = new Set<string>();
   for (const point of parsed.data) {
-    counts[point.language]++;
+    counts[point.language] = (counts[point.language] ?? 0) + 1;
     if (ids.has(point.id)) errors.push(`Duplicate lesson ID: ${point.id}`);
     ids.add(point.id);
     const title = `${point.language}:${normalized(point.title)}`;
@@ -46,9 +47,10 @@ export function validateGrammarDataset(value: unknown): GrammarDatasetValidation
       childIds.add(entry.id);
     }
   }
-  for (const language of ["ja", "es", "el"] as const) {
-    const target = { ja: 100, es: 80, el: 60 }[language];
+  for (const language of Object.keys(expected) as LanguageCode[]) {
+    const target = expected[language];
     if (counts[language] !== target) errors.push(`${language}: expected ${target} lessons; found ${counts[language]}.`);
   }
+  for (const language of Object.keys(counts) as LanguageCode[]) if (expected[language] === undefined) errors.push(`${language}: unexpected language in this dataset.`);
   return { points: parsed.data, errors, counts };
 }

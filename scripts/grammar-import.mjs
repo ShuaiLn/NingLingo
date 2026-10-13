@@ -11,10 +11,10 @@ try { process.loadEnvFile('.env.local'); } catch (error) { if (error.code !== 'E
 const reviewed = reviewedFile ? z.array(grammarProductionPointSchema).min(1).parse(JSON.parse(await readFile(reviewedFile, 'utf8'))) : null;
 if (reviewed && (reviewed.some(point => !point.reviewer || point.status === 'draft' || point.contentVersion < 2) || new Set(reviewed.map(point => point.id)).size !== reviewed.length)) throw new Error('Reviewed imports require unique lessons, version 2 or later, an actual human reviewer/date, and reviewed or published status.');
 const result = reviewed ? { points: reviewed } : await readGrammarDataset();
-const statuses = { draft: 0, reviewed: 0, published: 0 };
+const statuses = { draft: 0, reviewed: 0, published: 0, 'published-ai': 0 };
 for (const point of result.points) statuses[point.status]++;
 if (validateOnly) {
-  console.log(`Validated ${result.points.length} ${reviewed ? 'human-review records' : 'draft lessons'}; no database request made.`);
+  console.log(`Validated ${result.points.length} ${reviewed ? 'human-review records' : 'versioned lessons (original drafts and Korean AI publication)'}; no database request made.`);
   if (reviewed) console.log(JSON.stringify({ statuses, versionNotice: grammarImportVersionNotice }));
 } else {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -23,5 +23,5 @@ if (validateOnly) {
   const client = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data, error } = await client.rpc('nl_import_grammar', { p_points: result.points });
   if (error) throw new Error(`Grammar transaction rejected (${error.code || 'unknown'}): ${error.message}`);
-  console.log(JSON.stringify({ result: data, lessons: result.points.length, statuses, status: reviewed ? 'review metadata retained; only published lessons appear to learners' : 'draft; not publicly published', ...(reviewed ? { versionNotice: grammarImportVersionNotice } : {}) }));
+  console.log(JSON.stringify({ result: data, lessons: result.points.length, statuses, status: reviewed ? 'human review metadata retained' : 'Original drafts remain hidden; Korean published-ai lessons are visible with AI disclosure', ...(reviewed ? { versionNotice: grammarImportVersionNotice } : {}) }));
 }

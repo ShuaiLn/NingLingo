@@ -1,5 +1,6 @@
 import { LANGUAGES } from "@/domain/languages";
-import type { LanguageCode } from "@/domain/models";
+import type { SpeechLanguage } from "@/domain/models";
+export const SPEECH_LANGUAGES = { ...LANGUAGES, en: { name: "English", locale: "en-US" } };
 export interface Voice { name: string; lang: string; nativeVoice?: SpeechSynthesisVoice }
 export interface AudioState { supported: boolean; loading: boolean; voices: Voice[]; playingId: string | null; error: string | null }
 export interface SpeechPlatform {
@@ -8,8 +9,8 @@ export interface SpeechPlatform {
   speak(input: { text: string; locale: string; voice: Voice; end: () => void; error: (message: string) => void }): void;
   onVoicesChanged(callback: () => void): () => void;
 }
-export function chooseVoice(voices: Voice[], language: LanguageCode): Voice | undefined {
-  const locale = LANGUAGES[language].locale.toLowerCase();
+export function chooseVoice(voices: Voice[], language: SpeechLanguage): Voice | undefined {
+  const locale = SPEECH_LANGUAGES[language].locale.toLowerCase();
   const normalized = (voice: Voice) => voice.lang.replaceAll("_", "-").toLowerCase();
   return voices.find(voice => normalized(voice) === locale) ?? voices.find(voice => normalized(voice).split("-")[0] === language);
 }
@@ -32,15 +33,15 @@ export class AudioController {
   private update(patch: Partial<AudioState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(callback => callback()); }
   private loadVoices() { const voices = this.platform?.voices() ?? []; this.update({ voices, loading: voices.length === 0 && this.state.loading }); }
   stop = () => { this.generation++; this.update({ playingId: null }); this.platform?.cancel(); };
-  play(text: string, language: LanguageCode, id: string) {
+  play(text: string, language: SpeechLanguage, id: string) {
     this.stop();
     const voice = chooseVoice(this.state.voices, language);
-    if (!this.platform || !voice) { this.update({ error: `${LANGUAGES[language].name} voice is unavailable on this device.` }); return; }
+    if (!this.platform || !voice) { this.update({ error: `${SPEECH_LANGUAGES[language].name} voice is unavailable on this device.` }); return; }
     if (!text.trim()) return;
     this.update({ playingId: id, error: null });
     const generation = this.generation;
     try {
-      this.platform.speak({ text, locale: LANGUAGES[language].locale, voice, end: () => { if (this.generation === generation && this.state.playingId === id) this.update({ playingId: null }); }, error: message => { if (this.generation === generation && this.state.playingId === id) this.update({ playingId: null, error: message }); } });
+      this.platform.speak({ text, locale: SPEECH_LANGUAGES[language].locale, voice, end: () => { if (this.generation === generation && this.state.playingId === id) this.update({ playingId: null }); }, error: message => { if (this.generation === generation && this.state.playingId === id) this.update({ playingId: null, error: message }); } });
     } catch { this.update({ playingId: null, error: "Playback failed. Please try again." }); }
   }
   dispose() { this.stop(); this.cleanup?.(); if (this.timer) clearTimeout(this.timer); }

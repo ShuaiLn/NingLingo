@@ -2,7 +2,10 @@ import type { AppRepositories } from "./contracts";
 import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
 import { BrowserStorageAdapter, LOCAL_STORAGE_KEY, LocalStore, type LocalDatabase, type StorageAdapter } from "./storage";
 import { createDevelopmentSeed } from "./seed";
-import { grammarSeeds } from "@/data/grammar";
+import { grammarLessons } from "@/data/grammar";
+import { DEFAULT_QUIZ_PREFERENCES } from "@/domain/quiz-preferences";
+import { applyWordCareAction, applyNewIncorrectCareEvent } from "@/domain/word-care";
+import { suggestWordPairs, wordPairKey } from "@/domain/word-pairs";
 import { vocabularyDuplicateKey } from "@/domain/csv";
 import { normalizeVocabularyDetails, vocabularyExamples } from "@/domain/vocabulary";
 import { createQuizSession, answerQuiz } from "@/domain/quiz";
@@ -22,6 +25,7 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
   const today = (data: LocalDatabase) => learningDate(new Date(), data.profile.timezone);
   const owned = <T extends { userId: string }>(record: T | undefined, data: LocalDatabase): T => { if (!record || record.userId !== data.profile.id) throw new Error("The requested record is unavailable in this personal workspace."); return record; };
   const personal = <T extends { userId: string }>(records: T[], data: LocalDatabase): T[] => records.filter(record => record.userId === data.profile.id);
+  const pruneWordLinks = (data: LocalDatabase) => { const ids = new Set(data.entries.map(entry => entry.id)); data.wordCareStates = (data.wordCareStates ?? []).filter(state => ids.has(state.wordId)); data.wordPairs = (data.wordPairs ?? []).filter(pair => ids.has(pair.sourceWordId) && ids.has(pair.targetWordId)); };
   const findSession = (data: LocalDatabase, id: string) => owned(data.sessions.find(session => session.id === id), data);
   const checkVersion = (session: QuizSession, version: number) => { if (session.version !== version) throw new VersionConflictError(structuredClone(session)); };
   const settle = (data: LocalDatabase, session: QuizSession) => {
@@ -45,16 +49,28 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
     auth: { getSession: async () => store.snapshot().profile },
     settings: {
       getProfile: async () => store.snapshot().profile,
+      getQuizPreferences: async () => store.snapshot().quizPreferences ?? { ...DEFAULT_QUIZ_PREFERENCES },
+      updateQuizPreferences: input => store.transaction(data => { data.quizPreferences = { ...DEFAULT_QUIZ_PREFERENCES, ...data.quizPreferences, ...input }; return data.quizPreferences; }),
       update: input => store.transaction(data => { try { new Intl.DateTimeFormat("en", { timeZone: input.timezone }); } catch { throw new Error("Enter a valid IANA timezone, such as America/Tijuana."); } if (!input.displayName.trim()) throw new Error("Your display name is required."); data.profile = { ...data.profile, timezone: input.timezone, displayName: input.displayName.trim() }; return data.profile; }),
+    },
+    care: {
+      getStates: async language => { const data = store.snapshot(); return personal(data.wordCareStates ?? [], data).filter(state => data.entries.some(entry => entry.id === state.wordId && (!language || entry.language === language))); },
+      setManual: (wordId, action) => store.transaction(data => { owned(data.entries.find(entry => entry.id === wordId), data); const states = data.wordCareStates ??= []; const previous = states.find(state => state.wordId === wordId && state.userId === data.profile.id) ?? { wordId, userId: data.profile.id, manualCare: false, automaticSuppressed: false, updatedAt: now() }; const state = applyWordCareAction(previous, action, now()); data.wordCareStates = [...states.filter(item => item.wordId !== wordId || item.userId !== data.profile.id), state]; return state; }),
+    },
+    wordPairs: {
+      getPairs: async () => { const data = store.snapshot(); return personal(data.wordPairs ?? [], data); },
+      suggest: input => store.transaction(data => { const selected = input?.wordIds ? [...new Set(input.wordIds)].map(id => owned(data.entries.find(entry => entry.id === id), data)) : personal(data.entries, data); const pairs = data.wordPairs ??= []; pairs.push(...suggestWordPairs(selected, personal(pairs, data))); return personal(pairs, data); }),
+      save: input => store.transaction(data => { const source = owned(data.entries.find(entry => entry.id === input.sourceWordId), data), target = owned(data.entries.find(entry => entry.id === input.targetWordId), data); if (source.language === target.language) throw new Error("Choose words from different languages."); const pairs = data.wordPairs ??= []; const previous = input.id ? owned(pairs.find(pair => pair.id === input.id), data) : pairs.find(pair => pair.userId === data.profile.id && wordPairKey(pair.sourceWordId, pair.targetWordId) === wordPairKey(source.id, target.id)); if (pairs.some(pair => pair.userId === data.profile.id && pair.id !== previous?.id && wordPairKey(pair.sourceWordId, pair.targetWordId) === wordPairKey(source.id, target.id))) throw new Error("This word pair already exists."); const pair = { id: previous?.id ?? crypto.randomUUID(), userId: data.profile.id, sourceWordId: source.id, targetWordId: target.id, status: "confirmed" as const, confidence: 1, warning: null }; if (previous) pairs[pairs.indexOf(previous)] = pair; else pairs.push(pair); return pair; }),
+      remove: id => store.transaction(data => { const pair = owned((data.wordPairs ?? []).find(pair => pair.id === id), data); pair.status = "deleted"; }),
     },
     vocabulary: {
       getLists: async language => { const data = store.snapshot(); return personal(data.lists, data).filter(item => item.language === language); },
       createList: (language, name) => store.transaction(data => { if (!name.trim()) throw new Error("Give your list a name."); const list = { id: crypto.randomUUID(), userId: data.profile.id, language, name: name.trim(), createdAt: now() }; data.lists.push(list); return list; }),
       renameList: (id, name) => store.transaction(data => { const list = owned(data.lists.find(item => item.id === id), data); if (!name.trim()) throw new Error("Give your list a name."); list.name = name.trim(); return list; }),
-      deleteList: id => store.transaction(data => { owned(data.lists.find(item => item.id === id), data); const ids = personal(data.entries, data).filter(entry => entry.listId === id).map(entry => entry.id); data.lists = data.lists.filter(list => list.id !== id || list.userId !== data.profile.id); data.entries = data.entries.filter(entry => entry.listId !== id || entry.userId !== data.profile.id); data.wordProgress = data.wordProgress.filter(word => word.userId !== data.profile.id || !ids.includes(word.wordId)); }),
+      deleteList: id => store.transaction(data => { owned(data.lists.find(item => item.id === id), data); const ids = personal(data.entries, data).filter(entry => entry.listId === id).map(entry => entry.id); data.lists = data.lists.filter(list => list.id !== id || list.userId !== data.profile.id); data.entries = data.entries.filter(entry => entry.listId !== id || entry.userId !== data.profile.id); data.wordProgress = data.wordProgress.filter(word => word.userId !== data.profile.id || !ids.includes(word.wordId)); pruneWordLinks(data); }),
       getEntries: async language => { const data = store.snapshot(); return personal(data.entries, data).filter(entry => entry.language === language).map(entry => ({ ...entry, examples: vocabularyExamples(entry), relatedWords: entry.relatedWords ?? [] })); },
       saveEntry: (input, id) => store.transaction(data => { const entry = prepareEntry(input, data, id); const index = data.entries.findIndex(item => item.id === entry.id); if (index >= 0) data.entries[index] = entry; else { data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); } return entry; }),
-      deleteEntries: ids => store.transaction(data => { ids.forEach(id => owned(data.entries.find(entry => entry.id === id), data)); data.entries = data.entries.filter(entry => entry.userId !== data.profile.id || !ids.includes(entry.id)); data.wordProgress = data.wordProgress.filter(progress => progress.userId !== data.profile.id || !ids.includes(progress.wordId)); }),
+      deleteEntries: ids => store.transaction(data => { ids.forEach(id => owned(data.entries.find(entry => entry.id === id), data)); data.entries = data.entries.filter(entry => entry.userId !== data.profile.id || !ids.includes(entry.id)); data.wordProgress = data.wordProgress.filter(progress => progress.userId !== data.profile.id || !ids.includes(progress.wordId)); pruneWordLinks(data); }),
       importEntries: inputs => store.transaction(data => { let imported = 0; let duplicates = 0; for (const input of inputs) { if (personal(data.entries, data).some(entry => entry.language === input.language && vocabularyDuplicateKey(entry) === vocabularyDuplicateKey(input))) { duplicates++; continue; } const entry = prepareEntry(input, data); data.entries.push(entry); data.wordProgress.push(initialWordProgress(entry, today(data))); imported++; } return { imported, duplicates }; }),
       resolveTranslations: input => { const data = store.snapshot(); return resolveVocabularyTranslations({ ...input, userId: data.profile.id, cache: data.cache, provider: new MockTranslationProvider(), storeCache: entry => store.transaction(current => { if (current.profile.id !== entry.userId) throw new Error("The current account changed during translation."); current.cache.push(entry); }) }); },
     },
@@ -77,16 +93,17 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
       end: (id, version) => store.transaction(data => { const session = owned(data.alphabetSessions.find(session => session.id === id), data); if (session.version !== version) throw new AlphabetQuizVersionConflictError(session); if (!["active", "saved"].includes(session.status)) return session; session.status = "ended"; session.currentQuestion = null; session.version++; session.updatedAt = now(); return session; }),
     },
     quiz: {
-      getSessions: async language => { const data = store.snapshot(); return personal(data.sessions, data).filter(session => session.language === language).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
+      getSessions: async language => { const data = store.snapshot(); return personal(data.sessions, data).filter(session => session.language === language || session.languages?.includes(language)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
       getSession: async id => { const data = store.snapshot(); return findSession(data, id); },
-      create: input => store.transaction(data => { const entries = [...new Set(input.wordIds)].map(id => owned(data.entries.find(entry => entry.id === id), data)); const date = today(data); const session = createQuizSession({ ...input, id: crypto.randomUUID(), userId: data.profile.id, entries, learningDate: date, randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], dueWordIds: personal(data.wordProgress, data).filter(progress => input.wordIds.includes(progress.wordId) && progress.dueDate <= date).map(progress => progress.wordId) }); data.sessions.push(session); return session; }),
+      create: input => store.transaction(data => { const entries = [...new Set(input.wordIds)].map(id => owned(data.entries.find(entry => entry.id === id), data)); const date = today(data); const session = createQuizSession({ ...input, presentation: input.presentation ?? data.quizPreferences?.presentation ?? "always", pairs: personal(data.wordPairs ?? [], data), id: crypto.randomUUID(), userId: data.profile.id, entries, learningDate: date, randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], dueWordIds: personal(data.wordProgress, data).filter(progress => input.wordIds.includes(progress.wordId) && progress.dueDate <= date).map(progress => progress.wordId) }); data.quizPreferences = { ...DEFAULT_QUIZ_PREFERENCES, ...data.quizPreferences, presentation: session.presentation! }; data.sessions.push(session); return session; }),
       answer: (id, input) => store.transaction(data => {
         const session = findSession(data, id);
         if (session.attempts.some(attempt => attempt.id === input.submissionId)) return session;
         checkVersion(session, input.version);
         const updated = answerQuiz(captureDueReview(session, personal(data.wordProgress, data), today(data)), input.answer, input.submissionId);
         const attempt = updated.attempts.at(-1)!;
-        data.activity.push({ id: `quiz:${session.id}:${attempt.id}`, userId: data.profile.id, language: session.language, date: learningDate(attempt.answeredAt, data.profile.timezone), kind: "quiz", count: 1 });
+        data.activity.push({ id: `quiz:${session.id}:${attempt.id}`, userId: data.profile.id, language: session.entries.find(entry => entry.id === attempt.wordId)!.language, date: learningDate(attempt.answeredAt, data.profile.timezone), kind: "quiz", count: 1 });
+        data.wordCareStates = (data.wordCareStates ?? []).map(state => state.userId === data.profile.id ? applyNewIncorrectCareEvent(state, attempt) : state);
         if (updated.status === "completed") settle(data, updated);
         data.sessions[data.sessions.findIndex(item => item.id === id)] = updated;
         return updated;
@@ -106,9 +123,9 @@ export function createLocalRepositories(adapter: StorageAdapter = new BrowserSto
       getCache: async () => { const data = store.snapshot(); return personal(data.cache, data).filter(entry => (entry.lookupKind ?? "reading") === "reading"); },
     },
     grammar: {
-      getPoints: async language => structuredClone(grammarSeeds.filter(point => point.language === language)),
+      getPoints: async language => structuredClone(grammarLessons.filter(point => point.language === language)),
       getProgress: async language => { const data = store.snapshot(); return personal(data.grammarProgress, data).filter(progress => progress.language === language); },
-      submit: (pointId, answers) => store.transaction(data => { const point = grammarSeeds.find(row => row.id === pointId); if (!point) throw new Error("This lesson is unavailable."); const score = scoreGrammarExercises(point.exercises, answers); const previous = personal(data.grammarProgress, data).find(row => row.pointId === pointId && row.contentVersion === point.contentVersion); const progress: GrammarProgress = { ...score, completed: Boolean(previous?.completed || score.completed), userId: data.profile.id, pointId, language: point.language, contentVersion: point.contentVersion, attemptedAt: now() }; data.grammarProgress = data.grammarProgress.filter(row => row.pointId !== pointId || row.userId !== data.profile.id); data.grammarProgress.push(progress); data.activity.push({ id: crypto.randomUUID(), userId: data.profile.id, language: point.language, date: today(data), kind: "grammar", count: answers.length }); return progress; }),
+      submit: (pointId, answers) => store.transaction(data => { const point = grammarLessons.find(row => row.id === pointId); if (!point) throw new Error("This lesson is unavailable."); const score = scoreGrammarExercises(point.exercises, answers); const previous = personal(data.grammarProgress, data).find(row => row.pointId === pointId && row.contentVersion === point.contentVersion); const progress: GrammarProgress = { ...score, completed: Boolean(previous?.completed || score.completed), userId: data.profile.id, pointId, language: point.language, contentVersion: point.contentVersion, attemptedAt: now() }; data.grammarProgress = data.grammarProgress.filter(row => row.pointId !== pointId || row.userId !== data.profile.id); data.grammarProgress.push(progress); data.activity.push({ id: crypto.randomUUID(), userId: data.profile.id, language: point.language, date: today(data), kind: "grammar", count: answers.length }); return progress; }),
     },
     progress: { getWords: async language => { const data = store.snapshot(); return personal(data.wordProgress, data).filter(progress => progress.language === language); }, getActivity: async language => { const data = store.snapshot(); return personal(data.activity, data).filter(record => !language || record.language === language); } },
     subscribe: store.subscribe, getRevision: store.getRevision, getStorageStatus: store.status,

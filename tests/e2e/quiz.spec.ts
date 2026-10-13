@@ -44,8 +44,8 @@ async function latestSession(page: Page): Promise<QuizSession> {
 
 async function start(page: Page, title: string, wordIds = words): Promise<QuizSession> {
   await page.goto(`/ja/quiz?words=${wordIds}`);
-  await expect(page.getByRole("button", { name: "Start practice", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: new RegExp(`^${title}`) }).click();
+  await expect(page.getByRole("button", { name: "Start practice", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Start practice", exact: true }).click();
   await expect(page.locator(".quiz-question-card")).toBeVisible();
   return latestSession(page);
@@ -95,9 +95,9 @@ for (const [type, title] of [
 
 test("one-word typing corrects and retries immediately; multiple choice explains insufficient options", async ({ page }) => {
   await page.goto("/ja/quiz?words=word-ja-1");
-  await expect(page.getByText("1 eligible word", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Start practice", exact: true }).click();
-  await expect(page.locator("main [role='alert']")).toContainText("fewer than two unambiguous choices");
+  await expect(page.getByText("0 eligible words", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start practice", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Ineligible words")).toContainText("No enabled question type can use this word");
   await page.getByRole("button", { name: /^Typing/ }).click();
   await page.getByRole("button", { name: "Start practice", exact: true }).click();
   await expect(page.locator(".quiz-question-card")).toBeVisible();

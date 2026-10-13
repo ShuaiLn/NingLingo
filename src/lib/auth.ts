@@ -4,7 +4,7 @@ export function authDestination(value: unknown): string {
   if (typeof value !== "string" || /[\\\s]|%2f|%5c/i.test(value)) return "/ja";
   try {
     const url = new URL(value, "https://ninglingo.invalid");
-    return url.origin === "https://ninglingo.invalid" && /^\/(ja|es|el)(\/|$)/.test(url.pathname)
+    return url.origin === "https://ninglingo.invalid" && /^\/(ja|es|el|ko)(\/|$)/.test(url.pathname)
       ? url.pathname + url.search : "/ja";
   } catch { return "/ja"; }
 }

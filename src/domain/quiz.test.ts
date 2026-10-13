@@ -82,7 +82,7 @@ describe("quiz setup and frozen configuration", () => {
     expect(() => quizSetup({ entries, type: "japanese-reading" })).toThrow("choose Typing");
   });
 
-  it("only Japanese option audio uses reading instead of the written word", () => {
+  it("uses native written text for Japanese and Spanish option audio", () => {
     const entries = [
       testEntry(0, { language: "es", word: "casa", reading: "kah-sah", translation: "house" }),
       testEntry(1, { language: "es", word: "perro", reading: "peh-rroh", translation: "dog" }),
@@ -90,7 +90,7 @@ describe("quiz setup and frozen configuration", () => {
     const spanish = createQuizSession({ id: "s", userId: "user", language: "es", entries, type: "meaning-word", randomSeed: 1, learningDate: "2026-10-11" });
     expect(spanish.questionTemplates.every((question) => question.choices.every((choice) => choice.audioText === choice.text))).toBe(true);
     const japanese = testSession(2, 1, "meaning-word");
-    expect(japanese.questionTemplates.every((question) => question.choices.every((choice) => choice.audioText === japanese.entries.find((entry) => entry.id === choice.id)?.reading))).toBe(true);
+    expect(japanese.questionTemplates.every((question) => question.choices.every((choice) => choice.audioText === japanese.entries.find((entry) => entry.id === choice.id)?.word))).toBe(true);
   });
 
   it("freezes entries, accepted answers, question choices and type", () => {

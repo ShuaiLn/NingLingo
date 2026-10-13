@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type { AppRepositories } from "./contracts";
 import { AlphabetQuizVersionConflictError, VersionConflictError } from "./contracts";
-import type { ActivityRecord, AlphabetQuizSession, GrammarProgress, LanguageCode, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import type { ActivityRecord, AlphabetQuizSession, GrammarPoint, GrammarProgress, LanguageCode, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
 import { createQuizSession, answerQuiz } from "@/domain/quiz";
 import { createAlphabetQuizSession, answerAlphabetQuiz } from "@/domain/alphabet-quiz";
 import { resolveVocabularyTranslations } from "@/services/vocabulary-translation";
@@ -11,7 +11,12 @@ import { learningDate } from "@/domain/dates";
 import { ReadingLookupService } from "@/domain/reading";
 import { DeepLTranslationProvider } from "@/services/deepl";
 import { privilegedSupabase } from "@/lib/supabase/server";
+import { DEFAULT_QUIZ_PREFERENCES } from "@/domain/quiz-preferences";
+import { suggestWordPairs } from "@/domain/word-pairs";
+import type { QuizPreferences, WordPair } from "@/domain/models";
+import koreanGrammar from "../../content/grammar/generated/ko.json";
 
+const koreanLessonOrder = new Map(koreanGrammar.map((point, index) => [point.id, index]));
 const translationProvider = new DeepLTranslationProvider({ key: process.env.DEEPL_API_KEY, baseUrl: process.env.DEEPL_API_BASE_URL });
 const lookupService = new ReadingLookupService(translationProvider);
 export { translationProvider };
@@ -68,6 +73,8 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
   }
   const entries = (language: LanguageCode) => rpc<VocabularyEntry[]>("nl_vocabulary_entries", { p_language: language });
   const words = (language: LanguageCode) => rpc<WordProgress[]>("nl_progress_words", { p_language: language });
+  const preferences = async () => await rpc<QuizPreferences | null>("nl_quiz_preferences") ?? { ...DEFAULT_QUIZ_PREFERENCES };
+  const pairs = async () => await rpc<WordPair[] | null>("nl_word_pairs") ?? [];
   async function commit(previous: QuizSession, next: QuizSession, submissionId?: string) {
     const result = await rpc<{ conflict: boolean; session: QuizSession }>("nl_commit_quiz", { p_user_id: user.id, p_session_id: previous.id, p_expected_version: previous.version, p_state: next, p_submission_id: submissionId ?? null }, true);
     if (result.conflict) throw new VersionConflictError(result.session);
@@ -75,11 +82,18 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
   }
   const repos: AppRepositories = {
     auth: { getSession: profile },
-    settings: { getProfile: profile, update: async input => {
+    settings: { getProfile: profile, getQuizPreferences: preferences, updateQuizPreferences: input => rpc("nl_update_quiz_preferences", { p_preferences: input }), update: async input => {
       try { new Intl.DateTimeFormat("en", { timeZone: input.timezone }); } catch { throw new Error("Enter a valid IANA timezone, such as America/Tijuana."); }
       if (!input.displayName.trim()) throw new Error("Your display name is required.");
       const { error } = await client.from("profiles").update({ display_name: input.displayName.trim(), timezone: input.timezone }).eq("user_id", user.id); failure(error); return profile();
     } },
+    care: { getStates: language => rpc("nl_word_care", { p_language: language ?? null }), setManual: (wordId, action) => rpc("nl_set_word_care", { p_word_id: wordId, p_action: action }) },
+    wordPairs: {
+      getPairs: pairs,
+      suggest: async input => { const vocabulary = (await Promise.all((["ja", "es", "el", "ko"] as const).map(entries))).flat(); const selected = input?.wordIds ? input.wordIds.map(id => { const entry = vocabulary.find(entry => entry.id === id); if (!entry) throw new Error("A selected word is unavailable in your workspace."); return entry; }) : vocabulary; const suggestions = suggestWordPairs(selected, await pairs()); return rpc("nl_suggest_word_pairs", { p_pairs: suggestions }); },
+      save: input => rpc("nl_save_word_pair", { p_source_word_id: input.sourceWordId, p_target_word_id: input.targetWordId, p_pair_id: input.id ?? null }),
+      remove: id => rpc("nl_delete_word_pair", { p_pair_id: id }),
+    },
     vocabulary: {
       getLists: language => rows<VocabularyList>("vocabulary_lists", language),
       createList: async (language, name) => { const { data, error } = await client.from("vocabulary_lists").insert({ user_id: user.id, language, name: name.trim() }).select().single(); failure(error); return camelRow<VocabularyList>(data as Row); },
@@ -104,14 +118,15 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
       end: async (id, version) => { const previous = await alphabetSession(id); if (previous.version !== version) throw new AlphabetQuizVersionConflictError(previous); if (!["active", "saved"].includes(previous.status)) return previous; return commitAlphabet(previous, { ...previous, status: "ended", currentQuestion: null, version: version + 1, updatedAt: new Date().toISOString() }); },
     },
     quiz: {
-      getSessions: async language => { const result: QuizSession[] = []; for (let offset = 0; ; offset += 1000) { const { data, error } = await client.from("quiz_sessions").select("state").eq("language", language).order("updated_at", { ascending: false }).order("id").range(offset, offset + 999); failure(error); result.push(...(data ?? []).map(row => row.state as QuizSession)); if ((data ?? []).length < 1000) return result; } },
+      getSessions: async language => { const result: QuizSession[] = []; for (let offset = 0; ; offset += 1000) { const { data, error } = await client.from("quiz_sessions").select("state").or(`language.eq.${language},participating_languages.cs.{${language}}`).order("updated_at", { ascending: false }).order("id").range(offset, offset + 999); failure(error); result.push(...(data ?? []).map(row => row.state as QuizSession)); if ((data ?? []).length < 1000) return result; } },
       getSession: session,
       create: async input => {
         const selected = [...new Set(input.wordIds)];
-        const vocabulary = await entries(input.language);
+        const enabledLanguages = [...new Set(input.languages ?? [input.language])];
+        const vocabulary = (await Promise.all(enabledLanguages.map(entries))).flat();
         const frozen = selected.map(id => { const entry = vocabulary.find(row => row.id === id); if (!entry) throw new Error("A selected word is unavailable in this language."); return entry; });
         const day = learningDate(new Date(), (await profile()).timezone);
-        const state = createQuizSession({ id: crypto.randomUUID(), userId: user.id, language: input.language, entries: frozen, type: input.type, randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], learningDate: day, dueWordIds: (await words(input.language)).filter(word => selected.includes(word.wordId) && word.dueDate <= day).map(word => word.wordId) });
+        const state = createQuizSession({ ...input, id: crypto.randomUUID(), userId: user.id, entries: frozen, presentation: input.presentation ?? (await preferences()).presentation, pairs: (input.types ?? [input.type]).some(type => type.startsWith("translation-")) ? await pairs() : [], randomSeed: input.randomSeed ?? crypto.getRandomValues(new Uint32Array(1))[0], learningDate: day, dueWordIds: (await Promise.all(enabledLanguages.map(words))).flat().filter(word => selected.includes(word.wordId) && word.dueDate <= day).map(word => word.wordId) });
         return rpc("nl_create_quiz", { p_user_id: user.id, p_state: state }, true);
       },
       answer: async (id, input) => {
@@ -119,7 +134,7 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
         if (previous.attempts.some(attempt => attempt.id === input.submissionId)) return previous;
         if (previous.version !== input.version) throw new VersionConflictError(previous);
         const day = learningDate(new Date(), (await profile()).timezone);
-        const next = answerQuiz(captureDueReview(previous, await words(previous.language), day), input.answer, input.submissionId);
+        const next = answerQuiz(captureDueReview(previous, (await Promise.all((previous.languages ?? [previous.language]).map(words))).flat(), day), input.answer, input.submissionId);
         return commit(previous, next, input.submissionId);
       },
       saveAndExit: async (id, version) => { const previous = await session(id); if (previous.version !== version) throw new VersionConflictError(previous); if (previous.status !== "active") throw new Error("Only an active quiz can be saved."); return commit(previous, { ...previous, status: "saved", version: version + 1, updatedAt: new Date().toISOString() }); },
@@ -145,7 +160,12 @@ export function createSupabaseRepositories(client: SupabaseClient, user: User): 
         } });
       },
     },
-    grammar: { getPoints: language => rpc("nl_grammar_points", { p_language: language }), getProgress: language => rows<GrammarProgress>("grammar_progress", language), submit: (pointId, answers) => rpc("nl_submit_grammar", { p_point_id: pointId, p_answers: answers }) },
+    grammar: { getPoints: async language => {
+      const points = await rpc<GrammarPoint[]>("nl_grammar_points", { p_language: language });
+      // The existing RPC orders by ID. Keep the authored Korean syllabus order
+      // while retaining live content, hidden-lesson filtering and future IDs.
+      return language === "ko" ? [...points].sort((left, right) => (koreanLessonOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (koreanLessonOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)) : points;
+    }, getProgress: language => rows<GrammarProgress>("grammar_progress", language), submit: (pointId, answers) => rpc("nl_submit_grammar", { p_point_id: pointId, p_answers: answers }) },
     progress: { getWords: words, getActivity: async language => (await rows<ActivityRecord & { learningDate: string }>("learning_activity", language)).map(row => ({ ...row, date: row.learningDate })) },
     subscribe: () => () => undefined, getRevision: () => 0, getStorageStatus: () => "Cloud sync · Supabase",
   };

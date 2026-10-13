@@ -3,6 +3,7 @@ export const LANGUAGES: Record<LanguageCode, { name: string; nativeName: string;
   ja: { name: "Japanese", nativeName: "日本語", locale: "ja-JP", glyph: "あ", greeting: "A little practice, every day." },
   es: { name: "Spanish", nativeName: "Español", locale: "es-ES", glyph: "ñ", greeting: "A little practice, every day." },
   el: { name: "Greek", nativeName: "Ελληνικά", locale: "el-GR", glyph: "Ω", greeting: "A little practice, every day." },
+  ko: { name: "Korean", nativeName: "한국어", locale: "ko-KR", glyph: "한", greeting: "A little practice, every day." },
 };
-export function isLanguage(value: string): value is LanguageCode { return value === "ja" || value === "es" || value === "el"; }
+export function isLanguage(value: string): value is LanguageCode { return value === "ja" || value === "es" || value === "el" || value === "ko"; }
 export function kanaDisplay(text: string, mode: "hiragana" | "katakana"): string { return [...text].map(c => { const n = c.charCodeAt(0); return mode === "katakana" && n >= 0x3041 && n <= 0x3096 ? String.fromCharCode(n + 0x60) : mode === "hiragana" && n >= 0x30a1 && n <= 0x30f6 ? String.fromCharCode(n - 0x60) : c; }).join(""); }

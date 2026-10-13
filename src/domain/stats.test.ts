@@ -33,4 +33,13 @@ describe("dashboard calculations", () => {
     expect(stats.grammarCompleted).toBe(0);
     expect(stats.streak).toBe(0);
   });
+
+  it("includes manual care for untested words and hides suppressed automatic care", () => {
+    const manual = testEntry(0), automatic = testEntry(1);
+    const stats = calculateDashboardStats({ entries: [manual, automatic], wordProgress: [{ ...initialWordProgress(automatic, "2026-10-12"), firstAttempts: 1, firstCorrect: 0 }], careStates: [
+      { wordId: manual.id, userId: "user", manualCare: true, automaticSuppressed: false, updatedAt: "now" },
+      { wordId: automatic.id, userId: "user", manualCare: false, automaticSuppressed: true, updatedAt: "now" },
+    ], sessions: [], grammarPoints: [], grammarProgress: [], activity: [], today: "2026-10-12" });
+    expect(stats.weakWords).toEqual([manual]);
+  });
 });

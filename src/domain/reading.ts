@@ -10,7 +10,7 @@ function normalized(text: string, language: LanguageCode): string {
 export function tokenizeReading(body: string, language: LanguageCode, entries: VocabularyEntry[]): ReadingToken[] {
   const dictionary = entries.filter(entry => entry.language === language && entry.word).sort((a, b) => b.word.length - a.word.length);
   const segmenter = new Intl.Segmenter(language, { granularity: "word" });
-  if (language !== "ja") {
+  if (language !== "ja" && language !== "ko") {
     return [...segmenter.segment(body)].map(segment => {
       const entry = segment.isWordLike ? dictionary.find(item => normalized(item.word, language) === normalized(segment.segment, language)) : undefined;
       return { text: segment.segment, start: segment.index, end: segment.index + segment.segment.length, word: Boolean(segment.isWordLike), vocabularyEntryId: entry?.id };

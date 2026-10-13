@@ -1,6 +1,6 @@
 import type { LanguageCode, TranslationProvider } from "@/domain/models";
 interface DeepLConfig { key?: string; baseUrl?: string }
-const sourceLanguages: Record<LanguageCode, string> = { ja: "JA", es: "ES", el: "EL" };
+const sourceLanguages: Record<LanguageCode, string> = { ja: "JA", es: "ES", el: "EL", ko: "KO" };
 export const DEEPL_MAX_REQUEST_BYTES = 128 * 1024;
 /** DeepL's byte limit applies to the entire UTF-8 JSON body, not JavaScript string length. */
 export function deepLTranslationBatches(language: LanguageCode, texts: string[], context = ""): string[][] {

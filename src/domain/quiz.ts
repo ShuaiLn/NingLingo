@@ -1,4 +1,5 @@
-import type { ISODate, LanguageCode, QuizChoice, QuizQuestion, QuizSession, QuizType, VocabularyEntry } from "./models";
+import type { ISODate, LanguageCode, QuizChoice, QuizQuestion, QuizSession, QuizType, VocabularyEntry, QuizPresentation, TranslationDirection, WordPair } from "./models";
+import { freezeMixedTemplates, mixedQuizSetup } from "./mixed-quiz";
 
 export const QUIZ_SCHEDULER_VERSION = 1;
 
@@ -54,7 +55,7 @@ function choiceFor(entry: VocabularyEntry, type: QuizType): QuizChoice {
   return {
     id: entry.id,
     text: type === "word-meaning" ? entry.translation : type === "japanese-reading" ? entry.reading : entry.word,
-    audioText: entry.language === "ja" && entry.reading ? entry.reading : entry.word,
+    audioText: type === "word-meaning" ? entry.translation : entry.word,
   };
 }
 
@@ -118,18 +119,27 @@ export interface CreateQuizSessionInput {
   randomSeed: number;
   learningDate: ISODate;
   dueWordIds?: string[];
+  languages?: LanguageCode[];
+  types?: QuizType[];
+  directions?: TranslationDirection[];
+  pairs?: WordPair[];
+  listeningLanguages?: LanguageCode[];
+  presentation?: QuizPresentation;
   now?: string;
 }
 
 export function createQuizSession(input: CreateQuizSessionInput): QuizSession {
-  if (input.entries.some((entry) => entry.language !== input.language || entry.userId !== input.userId)) {
+  const extended = input.languages !== undefined || input.types !== undefined || input.directions !== undefined || ["spelling", "listening", "translation-mcq", "translation-typing"].includes(input.type);
+  if (input.entries.some((entry) => (!extended && entry.language !== input.language) || entry.userId !== input.userId)) {
     throw new QuizConfigurationError("Quiz words must belong to the current user and language.");
   }
-  const setup = quizSetup(input);
+  const mixed = extended ? mixedQuizSetup(input) : null;
+  if (mixed && mixed.eligible.length === 0) throw new QuizConfigurationError(mixed.ineligible.map(item => item.reason).join(" ") || "Select at least one eligible word.");
+  const setup = mixed ? { entries: mixed.eligible, retryRange: retryIntervalRange(mixed.eligible.length) } : quizSetup(input);
   const now = input.now ?? new Date().toISOString();
   const state = { randomState: input.randomSeed >>> 0 };
   const entries = quizShuffle(structuredClone(setup.entries), state);
-  const templates = entries.map((entry): QuizQuestion => {
+  const templates = mixed ? freezeMixedTemplates(entries, mixed, state) : entries.map((entry): QuizQuestion => {
     const choices = input.type === "typing" ? [] : quizShuffle([
       choiceFor(entry, input.type),
       ...quizShuffle(possibleDistractors(entry, entries, input.type), state).slice(0, 3),
@@ -153,6 +163,8 @@ export function createQuizSession(input: CreateQuizSessionInput): QuizSession {
     version: 1, createdAt: now, updatedAt: now, learningDate: input.learningDate,
     dueWordIds: (input.dueWordIds ?? []).filter((id) => entries.some((entry) => entry.id === id)),
     settled: false, configuration: { minChoices: 2, maxChoices: 4, retryRange: setup.retryRange },
+    ...(extended ? { languages: [...new Set([...entries.map(entry => entry.language), ...templates.flatMap(question => [question.sourceLanguage, question.targetLanguage]).filter((language): language is LanguageCode => Boolean(language && language !== "en"))])], enabledTypes: [...new Set(input.types ?? [input.type])], directions: structuredClone(input.directions ?? []) } : {}),
+    ...(input.presentation ? { presentation: input.presentation } : {}),
   };
   scheduleNextQuestion(session);
   return session;
@@ -197,7 +209,7 @@ export function answerQuiz(original: QuizSession, answer: string, submissionId?:
   if (original.status !== "active" || !original.currentQuestion) throw new Error("This quiz is not active.");
   const session = structuredClone(original);
   const question = session.currentQuestion!;
-  const correct = session.type === "typing"
+  const correct = (question.inputMode ?? (session.type === "typing" ? "text" : "choice")) === "text"
     ? question.acceptedAnswers.includes(normalizeAnswer(answer))
     : question.correctChoiceId === answer;
   const answeredAt = now ?? new Date().toISOString();

@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore } 
 import type { AppRepositories } from "@/repositories/contracts";
 import { createHttpRepositories } from "@/repositories/http";
 import { useRouter } from "next/navigation";
-import type { ActivityRecord, AlphabetQuizSession, GrammarPoint, GrammarProgress, LanguageCode, QuizSession, Reading, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import type { ActivityRecord, AlphabetQuizSession, GrammarPoint, GrammarProgress, LanguageCode, QuizSession, Reading, UserProfile, VocabularyEntry, VocabularyList, WordCareState, WordProgress } from "@/domain/models";
 const RepositoryContext = createContext<AppRepositories | null>(null);
 let browserRepositories: AppRepositories | null = null;
 export function AppProvider({ children, local = false }: { children: React.ReactNode; local?: boolean }) {
@@ -14,9 +14,9 @@ export function AppProvider({ children, local = false }: { children: React.React
   return <RepositoryContext.Provider value={repos}>{children}</RepositoryContext.Provider>;
 }
 export function useRepositories(): AppRepositories { const repos = useContext(RepositoryContext); if (!repos) throw new Error("Repositories must be used inside AppProvider."); return repos; }
-interface AppData { language: LanguageCode; entries: VocabularyEntry[]; lists: VocabularyList[]; sessions: QuizSession[]; alphabetSessions: AlphabetQuizSession[]; readings: Reading[]; grammar: GrammarPoint[]; grammarProgress: GrammarProgress[]; wordProgress: WordProgress[]; activity: ActivityRecord[]; allActivity: ActivityRecord[]; profile: UserProfile; ready: boolean }
+interface AppData { language: LanguageCode; entries: VocabularyEntry[]; lists: VocabularyList[]; sessions: QuizSession[]; alphabetSessions: AlphabetQuizSession[]; readings: Reading[]; grammar: GrammarPoint[]; grammarProgress: GrammarProgress[]; wordProgress: WordProgress[]; careStates: WordCareState[]; activity: ActivityRecord[]; allActivity: ActivityRecord[]; profile: UserProfile; ready: boolean }
 const emptyProfile: UserProfile = { id: "", email: "", displayName: "Ning", timezone: "America/Tijuana", createdAt: "" };
-function emptyData(language: LanguageCode): AppData { return { language, entries: [], lists: [], sessions: [], alphabetSessions: [], readings: [], grammar: [], grammarProgress: [], wordProgress: [], activity: [], allActivity: [], profile: emptyProfile, ready: false }; }
+function emptyData(language: LanguageCode): AppData { return { language, entries: [], lists: [], sessions: [], alphabetSessions: [], readings: [], grammar: [], grammarProgress: [], wordProgress: [], careStates: [], activity: [], allActivity: [], profile: emptyProfile, ready: false }; }
 export function useAppData(language: LanguageCode) {
   const repos = useRepositories();
   const revision = useSyncExternalStore(repos.subscribe, repos.getRevision, () => 0);
@@ -24,7 +24,7 @@ export function useAppData(language: LanguageCode) {
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
-    Promise.all([repos.vocabulary.getEntries(language), repos.vocabulary.getLists(language), repos.quiz.getSessions(language), repos.alphabetQuiz.getSessions(language), repos.reading.getReadings(language), repos.grammar.getPoints(language), repos.grammar.getProgress(language), repos.progress.getWords(language), repos.progress.getActivity(language), repos.progress.getActivity(), repos.settings.getProfile()]).then(([entries, lists, sessions, alphabetSessions, readings, grammar, grammarProgress, wordProgress, activity, allActivity, profile]) => { if (active) { setData({ language, entries, lists, sessions, alphabetSessions, readings, grammar, grammarProgress, wordProgress, activity, allActivity, profile, ready: true }); setError(""); } }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "Could not load your learning data."); });
+    Promise.all([repos.vocabulary.getEntries(language), repos.vocabulary.getLists(language), repos.quiz.getSessions(language), repos.alphabetQuiz.getSessions(language), repos.reading.getReadings(language), repos.grammar.getPoints(language), repos.grammar.getProgress(language), repos.progress.getWords(language), repos.progress.getActivity(language), repos.progress.getActivity(), repos.settings.getProfile(), repos.care.getStates(language)]).then(([entries, lists, sessions, alphabetSessions, readings, grammar, grammarProgress, wordProgress, activity, allActivity, profile, careStates]) => { if (active) { setData({ language, entries, lists, sessions, alphabetSessions, readings, grammar, grammarProgress, wordProgress, activity, allActivity, profile, careStates, ready: true }); setError(""); } }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "Could not load your learning data."); });
     return () => { active = false; };
   }, [repos, language, revision]);
   return { ...(data.language === language ? data : emptyData(language)), repos, error };

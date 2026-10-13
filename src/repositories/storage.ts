@@ -1,4 +1,5 @@
 import type { ActivityRecord, AlphabetQuizSession, GrammarProgress, QuizSession, Reading, ReadingAnnotation, ReadingVersion, TranslationCacheEntry, UserProfile, VocabularyEntry, VocabularyList, WordProgress } from "@/domain/models";
+import type { WordPair, WordCareState, QuizPreferences } from "@/domain/models";
 import { RELATION_TYPES } from "@/domain/models";
 
 export interface LocalDatabase {
@@ -15,6 +16,9 @@ export interface LocalDatabase {
   cache: TranslationCacheEntry[];
   grammarProgress: GrammarProgress[];
   activity: ActivityRecord[];
+  wordPairs?: WordPair[];
+  wordCareStates?: WordCareState[];
+  quizPreferences?: QuizPreferences;
 }
 export interface StorageAdapter { read(): LocalDatabase | null; write(data: LocalDatabase): void; status(): string }
 
@@ -24,11 +28,16 @@ function integer(value: unknown, min = 0): boolean { return typeof value === "nu
 function oneOf(value: unknown, values: readonly string[]): boolean { return typeof value === "string" && values.includes(value); }
 function stringArray(value: unknown): boolean { return Array.isArray(value) && value.every(item => typeof item === "string"); }
 function rows(value: unknown, validate: (row: Record<string, unknown>) => boolean): boolean { return Array.isArray(value) && value.every(item => { const row = object(item); return row !== null && validate(row); }); }
-function language(row: Record<string, unknown>): boolean { return oneOf(row.language, ["ja", "es", "el"]); }
+function language(row: Record<string, unknown>): boolean { return oneOf(row.language, ["ja", "es", "el", "ko"]); }
 function ownedLanguage(row: Record<string, unknown>): boolean { return language(row) && strings(row, ["userId"]); }
 function nullableString(value: unknown): boolean { return value === null || typeof value === "string"; }
+const quizTypes = ["word-meaning", "meaning-word", "typing", "japanese-reading", "spelling", "listening", "translation-mcq", "translation-typing"] as const;
+const languageCodes = ["ja", "es", "el", "ko"] as const;
 function question(row: Record<string, unknown>): boolean {
-  return strings(row, ["id", "wordId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && nullableString(row.correctChoiceId) && stringArray(row.acceptedAnswers) && rows(row.choices, choice => strings(choice, ["id", "text", "audioText"]));
+  return strings(row, ["id", "wordId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && nullableString(row.correctChoiceId) && stringArray(row.acceptedAnswers) && rows(row.choices, choice => strings(choice, ["id", "text", "audioText"]))
+    && (row.type === undefined || oneOf(row.type, quizTypes)) && (row.inputMode === undefined || oneOf(row.inputMode, ["text", "choice"]))
+    && ["sourceLanguage", "targetLanguage", "audioLanguage"].every(key => row[key] === undefined || oneOf(row[key], [...languageCodes, "en"]))
+    && ["audioText", "direction", "contextWordId"].every(key => row[key] === undefined || typeof row[key] === "string");
 }
 function vocabulary(row: Record<string, unknown>): boolean {
   return ownedLanguage(row) && strings(row, ["id", "listId", "word", "reading", "translation", "type", "category", "example", "notes", "createdAt", "updatedAt"]) && rows(row.acceptedAnswers, answer => strings(answer, ["id", "text"]))
@@ -38,7 +47,11 @@ function vocabulary(row: Record<string, unknown>): boolean {
 function session(row: Record<string, unknown>): boolean {
   const configuration = object(row.configuration);
   return ownedLanguage(row) && strings(row, ["id", "createdAt", "updatedAt", "learningDate"])
-    && oneOf(row.type, ["word-meaning", "meaning-word", "typing", "japanese-reading"]) && oneOf(row.status, ["active", "saved", "completed", "ended"])
+    && oneOf(row.type, quizTypes) && oneOf(row.status, ["active", "saved", "completed", "ended"])
+    && (row.presentation === undefined || oneOf(row.presentation, ["always", "incorrect", "never"]))
+    && (row.languages === undefined || Array.isArray(row.languages) && row.languages.every(code => oneOf(code, languageCodes)))
+    && (row.enabledTypes === undefined || Array.isArray(row.enabledTypes) && row.enabledTypes.every(type => oneOf(type, quizTypes)))
+    && (row.directions === undefined || rows(row.directions, direction => oneOf(direction.source, languageCodes) && oneOf(direction.target, languageCodes) && direction.source !== direction.target))
     && rows(row.entries, vocabulary) && rows(row.questionTemplates, question) && rows(row.questions, question)
     && rows(row.attempts, attempt => strings(attempt, ["id", "questionId", "wordId", "answer", "answeredAt"]) && integer(attempt.position) && oneOf(attempt.kind, ["initial", "retry", "filler"]) && typeof attempt.correct === "boolean")
     && rows(row.reservations, reservation => strings(reservation, ["wordId"]) && integer(reservation.position) && integer(reservation.interval))
@@ -48,7 +61,12 @@ function session(row: Record<string, unknown>): boolean {
     && configuration !== null && integer(configuration.minChoices, 2) && integer(configuration.maxChoices, 2) && Array.isArray(configuration.retryRange) && configuration.retryRange.length === 2 && configuration.retryRange.every(value => integer(value));
 }
 function alphabetQuestion(row: Record<string, unknown>): boolean {
-  return strings(row, ["id", "itemId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && stringArray(row.acceptedAnswers) && (row.acceptedAnswers as string[]).length > 0;
+  const validMode = row.mode === undefined || oneOf(row.mode, ["typing", "mcq"]);
+  const validDirection = row.direction === undefined || oneOf(row.direction, ["character-to-pronunciation", "pronunciation-to-character"]);
+  const validOptions = row.mode !== "mcq" || rows(row.options, option => strings(option, ["id", "text", "symbol"]) && stringArray(option.pronunciationAnswers))
+    && (row.options as Record<string, unknown>[]).length === 4 && new Set((row.options as Record<string, unknown>[]).map(option => option.id)).size === 4
+    && typeof row.correctOptionId === "string" && (row.options as Record<string, unknown>[]).some(option => option.id === row.correctOptionId);
+  return validMode && validDirection && validOptions && strings(row, ["id", "itemId", "prompt"]) && integer(row.position, -1) && oneOf(row.kind, ["initial", "retry", "filler"]) && stringArray(row.acceptedAnswers) && (row.acceptedAnswers as string[]).length > 0;
 }
 function alphabetSession(row: Record<string, unknown>): boolean {
   const configuration = object(row.configuration);
@@ -73,6 +91,9 @@ function compatibleDatabase(value: LocalDatabase | null): LocalDatabase | null {
 export function isLocalDatabase(value: unknown): value is LocalDatabase {
   const database = object(value);
   if (!database || database.schemaVersion !== 1) return false;
+  if (database.wordPairs !== undefined && !rows(database.wordPairs, row => strings(row, ["id", "userId", "sourceWordId", "targetWordId"]) && oneOf(row.status, ["suggested", "confirmed", "deleted"]) && typeof row.confidence === "number" && row.confidence >= 0 && row.confidence <= 1 && nullableString(row.warning))) return false;
+  if (database.wordCareStates !== undefined && !rows(database.wordCareStates, row => strings(row, ["wordId", "userId", "updatedAt"]) && typeof row.manualCare === "boolean" && typeof row.automaticSuppressed === "boolean")) return false;
+  if (database.quizPreferences !== undefined) { const prefs = object(database.quizPreferences); if (!prefs || !oneOf(prefs.presentation, ["always", "incorrect", "never"]) || typeof prefs.vocabularyAutoAudio !== "boolean" || typeof prefs.alphabetAutoAudio !== "boolean") return false; }
   const profile = object(database.profile);
   if (!profile || !strings(profile, ["id", "email", "displayName", "timezone", "createdAt"])) return false;
   try { new Intl.DateTimeFormat("en", { timeZone: profile.timezone as string }); } catch { return false; }

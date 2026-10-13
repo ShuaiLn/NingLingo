@@ -34,7 +34,9 @@ export function createHttpRepositories(onSessionExpired: () => void): AppReposit
   }
   return {
     auth: { getSession: () => call("auth.session") },
-    settings: { getProfile: () => call("settings.profile"), update: input => call("settings.update", input, true) },
+    settings: { getProfile: () => call("settings.profile"), update: input => call("settings.update", input, true), getQuizPreferences: () => call("settings.quizPreferences"), updateQuizPreferences: input => call("settings.updateQuizPreferences", input, true) },
+    care: { getStates: language => call("care.states", { language }), setManual: (wordId, action) => call("care.setManual", { wordId, action }, true) },
+    wordPairs: { getPairs: () => call("wordPairs.list"), suggest: input => call("wordPairs.suggest", input ?? {}, true), save: input => call("wordPairs.save", input, true), remove: id => call("wordPairs.remove", { id }, true) },
     vocabulary: {
       getLists: language => call("vocabulary.lists", { language }),
       createList: (language, name) => call("vocabulary.createList", { language, name }, true),

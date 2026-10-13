@@ -3,6 +3,14 @@ import { DEEPL_MAX_REQUEST_BYTES, DeepLTranslationProvider, deepLTranslationBatc
 const input = { userId: "user-a", language: "el" as const, text: "κόσμος", context: "Ο κόσμος είναι όμορφος." };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
 describe("server DeepL provider", () => {
+  it("sends Korean Hangul with the KO source code and retains pronunciation outside translation input", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ character_count: 0, character_limit: 1000000 })).mockResolvedValueOnce(json({ translations: [{ text: "water" }] }));
+    const provider = new DeepLTranslationProvider({ key: "test-server-key" }, fetcher);
+    expect(await provider.translate({ userId: "user", language: "ko", text: "물", context: "물을 마셔요." })).toEqual({ translation: "water", source: "deepl" });
+    const payload = JSON.parse(String(fetcher.mock.calls[1][1]?.body));
+    expect(payload).toMatchObject({ text: ["물"], source_lang: "KO", target_lang: "EN", context: "물을 마셔요." });
+    expect(JSON.stringify(payload)).not.toContain("mul");
+  });
   it("translates only selected text with sentence context, explicit source, and English target", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ character_count: 7, character_limit: 1000000 })).mockResolvedValueOnce(json({ translations: [{ text: "world" }] }));
     const provider = new DeepLTranslationProvider({ key: "test-server-key", baseUrl: "https://api.deepl.com" }, fetcher);

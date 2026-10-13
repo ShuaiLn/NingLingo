@@ -1,0 +1,14 @@
+.word-details { text-align: left; overflow-wrap: anywhere; }
+.word-details h3 { margin: 0; }
+.word-details h4 { margin: 20px 0 10px; }
+.word-detail-fields { display: grid; grid-template-columns: minmax(100px, 160px) 1fr; gap: 10px 18px; }
+.word-detail-fields dt { color: #767581; font-size: 12px; }
+.word-detail-fields dd { margin: 0; }
+.word-detail-notes { white-space: pre-wrap; }
+.word-detail-example { padding: 12px 0; border-bottom: 1px solid #efedf2; }
+.word-detail-example p { margin: 6px 0; }
+.word-care { display: grid; justify-items: start; gap: 8px; margin-top: 16px; }
+.word-care .toolbar { margin: 0; gap: 8px; }
+.word-care .button { padding: 6px 12px; font-size: 12px; }
+.word-care small { max-width: 420px; }
+@media (max-width: 500px) { .word-detail-fields { grid-template-columns: 1fr; gap: 4px; } .word-detail-fields dd { margin-bottom: 12px; } }

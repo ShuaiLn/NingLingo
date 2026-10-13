@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AppRepositories } from "@/repositories/contracts";
-const language = z.enum(["ja", "es", "el"]);
+const language = z.enum(["ja", "es", "el", "ko"]);
 const id = z.uuid();
 const text = z.string().max(10000);
 const nonempty = z.string().trim().min(1).max(10000);
@@ -8,12 +8,22 @@ const version = z.number().int().positive();
 const example = z.object({ id: z.string().max(100), text: nonempty, reading: text, translation: text });
 const relation = z.object({ id: z.string().max(100), word: nonempty, reading: text, translation: text, relationType: z.enum(["derived", "compound", "synonym", "antonym", "word_form", "related"]) });
 const vocabulary = z.object({ language, listId: id, word: nonempty, reading: text, translation: nonempty, type: text, category: text, example: text, notes: text, acceptedAnswers: z.array(z.object({ id: z.string().max(100), text: nonempty })).max(100), examples: z.array(example).max(100).optional(), relatedWords: z.array(relation).max(100).optional() });
-const quizType = z.enum(["word-meaning", "meaning-word", "typing", "japanese-reading"]);
+const quizType = z.enum(["word-meaning", "meaning-word", "typing", "japanese-reading", "spelling", "listening", "translation-mcq", "translation-typing"]);
+const presentation = z.enum(["always", "incorrect", "never"]);
+const direction = z.object({ source: language, target: language }).refine(value => value.source !== value.target, "Translation directions must use different languages.");
 const readingInput = z.object({ language, title: z.string().trim().min(1).max(1000), body: z.string().min(1).max(750000), status: z.enum(["unread", "reading", "finished"]) });
 export async function executeRepositoryOperation(repos: AppRepositories, operation: string, input: unknown): Promise<unknown> {
   switch (operation) {
     case "auth.session": return repos.auth.getSession();
     case "settings.profile": return repos.settings.getProfile();
+    case "settings.quizPreferences": return repos.settings.getQuizPreferences();
+    case "settings.updateQuizPreferences": return repos.settings.updateQuizPreferences(z.object({ presentation: presentation.optional(), vocabularyAutoAudio: z.boolean().optional(), alphabetAutoAudio: z.boolean().optional() }).strict().parse(input));
+    case "care.states": return repos.care.getStates(z.object({ language: language.optional() }).parse(input).language);
+    case "care.setManual": { const p = z.object({ wordId: id, action: z.enum(["add", "remove"]) }).parse(input); return repos.care.setManual(p.wordId, p.action); }
+    case "wordPairs.list": return repos.wordPairs.getPairs();
+    case "wordPairs.suggest": return repos.wordPairs.suggest(z.object({ wordIds: z.array(id).min(1).max(1000).optional() }).parse(input));
+    case "wordPairs.save": return repos.wordPairs.save(z.object({ id: id.optional(), sourceWordId: id, targetWordId: id }).parse(input));
+    case "wordPairs.remove": return repos.wordPairs.remove(z.object({ id }).parse(input).id);
     case "settings.update": return repos.settings.update(z.object({ displayName: z.string().trim().min(1).max(80), timezone: z.string().min(1).max(100) }).parse(input));
     case "vocabulary.lists": return repos.vocabulary.getLists(z.object({ language }).parse(input).language);
     case "vocabulary.entries": return repos.vocabulary.getEntries(z.object({ language }).parse(input).language);
@@ -26,14 +36,14 @@ export async function executeRepositoryOperation(repos: AppRepositories, operati
     case "vocabulary.resolveTranslations": return repos.vocabulary.resolveTranslations(z.object({ language, rows: z.array(z.object({ line: z.number().int().positive(), word: z.string().trim().min(1).max(2000) })).min(1).max(2000) }).parse(input));
     case "alphabetQuiz.sessions": return repos.alphabetQuiz.getSessions(z.object({ language }).parse(input).language);
     case "alphabetQuiz.session": return repos.alphabetQuiz.getSession(z.object({ id }).parse(input).id);
-    case "alphabetQuiz.create": return repos.alphabetQuiz.create(z.object({ language, itemIds: z.array(z.string().min(1).max(200)).min(1).max(1000), randomSeed: z.number().int().min(0).max(4294967295).optional() }).parse(input));
+    case "alphabetQuiz.create": return repos.alphabetQuiz.create(z.object({ language, itemIds: z.array(z.string().min(1).max(200)).min(1).max(1000), randomSeed: z.number().int().min(0).max(4294967295).optional(), mode: z.enum(["typing", "mcq"]).optional(), direction: z.enum(["character-to-pronunciation", "pronunciation-to-character", "mixed"]).optional() }).parse(input));
     case "alphabetQuiz.answer": { const p = z.object({ id, answer: nonempty, version, submissionId: z.string().min(1).max(200) }).parse(input); return repos.alphabetQuiz.answer(p.id, p); }
     case "alphabetQuiz.save": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.saveAndExit(p.id, p.version); }
     case "alphabetQuiz.resume": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.resume(p.id, p.version); }
     case "alphabetQuiz.end": { const p = z.object({ id, version }).parse(input); return repos.alphabetQuiz.end(p.id, p.version); }
     case "quiz.sessions": return repos.quiz.getSessions(z.object({ language }).parse(input).language);
     case "quiz.session": return repos.quiz.getSession(z.object({ id }).parse(input).id);
-    case "quiz.create": return repos.quiz.create(z.object({ language, wordIds: z.array(id).min(1).max(1000), type: quizType, randomSeed: z.number().int().min(0).max(4294967295).optional() }).parse(input));
+    case "quiz.create": return repos.quiz.create(z.object({ language, wordIds: z.array(id).min(1).max(1000), type: quizType, randomSeed: z.number().int().min(0).max(4294967295).optional(), languages: z.array(language).min(1).max(4).optional(), types: z.array(quizType).min(1).max(8).optional(), directions: z.array(direction).max(12).optional(), listeningLanguages: z.array(language).max(4).optional(), presentation: presentation.optional() }).parse(input));
     case "quiz.answer": { const p = z.object({ id, answer: text, version, submissionId: z.string().min(1).max(200) }).parse(input); return repos.quiz.answer(p.id, p); }
     case "quiz.save": { const p = z.object({ id, version }).parse(input); return repos.quiz.saveAndExit(p.id, p.version); }
     case "quiz.resume": return repos.quiz.resume(z.object({ id }).parse(input).id);

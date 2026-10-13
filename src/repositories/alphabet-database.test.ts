@@ -236,3 +236,62 @@ describe("Vocabulary cache migration preserves contextual Reading identities", (
     await expect(db.query("update public.translation_cache set target_language='JA'")).rejects.toThrow("check constraint");
   });
 });
+
+describe("Alphabet MCQ service grading and immutable history", () => {
+  function mcq(language: AlphabetEntry["language"], direction: "character-to-pronunciation" | "pronunciation-to-character") {
+    const item = alphabetEntries.find(item => item.language === language)!;
+    return createAlphabetQuizSession({ id: crypto.randomUUID(), userId: userA, language, itemIds: [item.id], mode: "mcq", direction,
+      randomSeed: 71, learningDate: "2026-10-12", now });
+  }
+  it.each(["ja", "es", "el", "ko"] as const)("persists and grades both frozen directions for %s", async language => {
+    for (const direction of ["character-to-pronunciation", "pronunciation-to-character"] as const) {
+      const original = await rpc<AlphabetQuizSession>("nl_create_alphabet_quiz", [userA, mcq(language, direction)]);
+      const question = original.currentQuestion!;
+      const wrongId = question.options!.find(option => option.id !== question.correctOptionId)!.id;
+      const incorrect = (await commit(original, answer(original, wrongId))).session;
+      expect(incorrect.attempts[0].correct).toBe(false);
+      expect(incorrect.currentQuestion).toMatchObject({ options: question.options, direction, correctOptionId: question.correctOptionId });
+      const saved = (await commit(incorrect, changeStatus(incorrect, "saved"), null)).session;
+      const reloaded = (await db.query<{ state: AlphabetQuizSession }>("select state from public.alphabet_quiz_sessions where id=$1", [saved.id])).rows[0].state;
+      const resumed = (await commit(reloaded, changeStatus(reloaded, "active"), null)).session;
+      const completed = (await commit(resumed, answer(resumed, question.correctOptionId!))).session;
+      expect(completed.attempts.map(attempt => attempt.correct)).toEqual([false, true]);
+      expect(completed.questions.every(value => JSON.stringify(value.options) === JSON.stringify(question.options))).toBe(true);
+      expect(completed.questionTemplates).toEqual(original.questionTemplates);
+      expect(completed.contentVersion).toBe(2);
+    }
+  });
+  it("rejects duplicate or equivalent pronunciation choices at creation", async () => {
+    const duplicate = mcq("ja", "character-to-pronunciation");
+    duplicate.questionTemplates[0].options![1] = structuredClone(duplicate.questionTemplates[0].options![0]);
+    await expect(rpc("nl_create_alphabet_quiz", [userA, duplicate])).rejects.toThrow("four unique frozen options");
+    const ambiguous = mcq("ja", "character-to-pronunciation");
+    const template = ambiguous.questionTemplates[0];
+    const option = template.options!.find(option => option.id !== template.correctOptionId)!;
+    option.pronunciationAnswers.push(ambiguous.items[0].pronunciationAnswers[0]);
+    await expect(rpc("nl_create_alphabet_quiz", [userA, ambiguous])).rejects.toThrow("equivalent answers");
+  });
+  it("rejects competing characters for the exact pronunciation prompt", async () => {
+    const ambiguous = mcq("ja", "pronunciation-to-character");
+    const template = ambiguous.questionTemplates[0];
+    template.options!.find(option => option.id !== template.correctOptionId)!.pronunciationAnswers.push(template.prompt);
+    await expect(rpc("nl_create_alphabet_quiz", [userA, ambiguous])).rejects.toThrow("cannot also answer");
+  });
+  it("rejects forged grades, unknown IDs, changed option order and unenabled directions", async () => {
+    const draft = mcq("el", "pronunciation-to-character");
+    const disabled = structuredClone(draft);
+    disabled.configuration.direction = "character-to-pronunciation";
+    await expect(rpc("nl_create_alphabet_quiz", [userA, disabled])).rejects.toThrow("not enabled");
+    const original = await rpc<AlphabetQuizSession>("nl_create_alphabet_quiz", [userA, draft]);
+    const correct = answer(original, original.currentQuestion!.correctOptionId!);
+    const forged = structuredClone(correct);
+    forged.attempts[0].correct = false;
+    await expect(commit(original, forged)).rejects.toThrow("grade does not match");
+    forged.attempts[0].answer = "unknown-option";
+    await expect(commit(original, forged)).rejects.toThrow("frozen alphabet options");
+    const changed = structuredClone(correct);
+    changed.questionTemplates[0].options!.reverse();
+    await expect(commit(original, changed)).rejects.toThrow("immutable");
+    expect((await db.query("select * from public.alphabet_quiz_attempts")).rows).toEqual([]);
+  });
+});

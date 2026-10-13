@@ -15,7 +15,8 @@ export function grammarContentIssues(point: GrammarPoint): string[] {
   for (const exercise of point.exercises) {
     if (new Set(exercise.choices).size !== exercise.choices.length || exercise.correctIndex < 0 || exercise.correctIndex >= exercise.choices.length) issues.push(`Invalid exercise: ${exercise.id}.`);
   }
-  if (point.status !== "draft" && !point.reviewer) issues.push("Reviewed and published content requires a human review record.");
+  if (["reviewed", "published"].includes(point.status) && !point.reviewer) issues.push("Reviewed and published content requires a human review record.");
+  if (point.status === "published-ai" && (point.reviewer || !point.modificationNotes.includes("AI-authored; not human-reviewed"))) issues.push("AI publication must disclose its origin and must not claim human review.");
   if (!point.sources.length || point.sources.some((source) => !source.license || !source.version)) issues.push("Record source license and version.");
   return issues;
 }
